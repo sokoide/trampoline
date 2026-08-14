@@ -1,5 +1,5 @@
-#ifndef COOP_CTX_H
-#define COOP_CTX_H
+#ifndef TRAMPOLINE_CTX_H
+#define TRAMPOLINE_CTX_H
 
 #include <stddef.h> /* offsetof, _Static_assert */
 #include <stdint.h> /* uint64_t */
@@ -56,4 +56,4 @@ _Static_assert(offsetof(struct st_ctx, r15) == 48, "r15 must be at offset 48");
  * the normal calling convention even when optimization is enabled. */
 void st_ctx_swap(struct st_ctx* prev, struct st_ctx* next);
 
-#endif /* TRAMPOLIN_CTX_H */
+#endif /* TRAMPOLINE_CTX_H */

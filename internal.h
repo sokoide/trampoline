@@ -1,5 +1,5 @@
-#ifndef TRAMPOLIN_INTERNAL_H
-#define TRAMPOLIN_INTERNAL_H
+#ifndef TRAMPOLINE_INTERNAL_H
+#define TRAMPOLINE_INTERNAL_H
 
 #include "ctx.h"
 #include "st.h"

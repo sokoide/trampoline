@@ -1,6 +1,8 @@
-# trampolin
+# trampoline
 
-A small cooperative-threading sample for x86_64. `trampolin` is a teaching example
+日本語版: [README.md](README.md)
+
+A small cooperative-threading sample for x86_64. `trampoline` is a teaching example
 for observing how control first enters a new thread by executing `ret` to an address
 placed on its initial stack.
 
@@ -17,11 +19,12 @@ but look them up first if the terms are unfamiliar.
 
 ## Table of contents
 
-1. [Behavior](#behavior)
-2. [API](#api)
-3. [Context switch](#context-switch)
-4. [Build and run](#build-and-run)
-5. [Observing with gdb](#observing-with-gdb)
+1. [Prerequisites](#prerequisites)
+2. [Behavior](#behavior)
+3. [API](#api)
+4. [Context switch](#context-switch)
+5. [Build and run](#build-and-run)
+6. [Observing with gdb](#observing-with-gdb)
 
 ## Behavior
 
@@ -105,7 +108,7 @@ the stack.
 
 ```c
 sp = align_down(stack + 64 * 1024, 16);
-*--sp = 0;                    // ABI alignment word; invalid fallback if trampoline returns
+*--sp = 0;                    // ABI padding; invalid return target if trampoline returns
 *--sp = (uint64_t)trampoline; // destination of the first ret
 thread->ctx.rsp = (uint64_t)sp;
 ```
@@ -115,7 +118,7 @@ The stack grows from higher addresses toward lower addresses, so its initial sta
 ```text
 high address
 ┌────────────────────────────┐  stack + 64 KiB, rounded down to a 16-byte boundary
-│ 0                          │  ← ABI alignment word (not used normally)
+│ 0                          │  ← ABI padding (not used normally)
 ├────────────────────────────┤
 │ &trampoline                │  ← location referenced by thread->ctx.rsp
 └────────────────────────────┘
@@ -125,6 +128,13 @@ low address
 `ctx.rsp` points to `&trampoline`. There is no ordinary `call trampoline`. Instead,
 `st_ctx_swap`, after restoring the next context, executes `ret` from that position;
 `ret` pops `&trampoline` and jumps directly to the trampoline.
+
+The `0` is not the trampoline's normal return destination. Immediately after `ret`
+pops `&trampoline`, `rsp` points to this `0`. That makes `rsp % 16 == 8` at the
+trampoline entry point, which satisfies the System V AMD64 ABI alignment rule.
+The trampoline calls `_exit(0)` after `fn` returns, so normal execution never uses the
+`0`. If the trampoline returned by mistake, its `ret` would try to jump to address 0
+and terminate abnormally.
 
 ### 2. The first context switch
 
@@ -301,12 +311,13 @@ instead of assembling it directly on the host.
 ## Observing with gdb
 
 The `-O0` + `-fno-omit-frame-pointer` + `-fno-optimize-sibling-calls` flags exist for
-this observation. Run gdb inside an x86_64 Linux environment; gdb on a macOS host does
-not work, so use the OrbStack VM or an x86_64 Linux machine.
+this observation. This sample is an x86_64 Linux binary, so run gdb inside an x86_64
+Linux environment. On macOS, use the OrbStack VM. If gdb is not installed in the VM,
+first run `scripts/in-linux.sh x64-linux-env "apt-get update && apt-get install -y gdb"`.
 
 ```sh
 make build
-scripts/in-linux.sh x64-linux-env "gdb -q ./trampolin_sample"
+scripts/in-linux.sh x64-linux-env "gdb -q ./trampoline_sample"
 ```
 
 ### First arrival at the trampoline
@@ -325,8 +336,9 @@ Execution stops right after `ret` has popped `&trampoline`, and you can confirm:
   (`rsp % 16 == 8`)
 - `x/gx $rsp` shows `0x0` — the alignment word placed on the initial stack.
   `&trampoline` sat just below it and was already consumed by `ret`
-- `bt` does not produce a usable backtrace, because no function ever `call`ed the
-  trampoline. That itself is the evidence of an "uncalled entry point"
+- `bt` does not show a normal caller chain. Depending on the GDB version, it may show
+  only the trampoline or stop partway through the backtrace, because no function ever
+  `call`ed the trampoline
 
 If `break trampoline` does not resolve the symbol, use `break st.c:trampoline`.
 
@@ -334,14 +346,16 @@ If `break trampoline` does not resolve the symbol, use `break st.c:trampoline`.
 
 ```text
 (gdb) break st_ctx_swap
+(gdb) run
 (gdb) continue
 (gdb) bt
 (gdb) x/gx $rsp
 (gdb) info symbol *(void**)$rsp
 ```
 
-Repeat `continue` a few times and stop at a second-or-later rotation: there
-`st_ctx_swap` sits at the end of an ordinary call chain.
+The first stop from `run` is the initial switch from main to A, so it belongs to the
+`st_start()` call chain. Continue once to stop at A's yield to B; there,
+`st_ctx_swap` is at the end of an ordinary call chain.
 
 - `bt` shows the chain `st_ctx_swap` <- `switch_to_next` <- `st_yield` <- `worker`,
   matching the diagram in "3. Return addresses during yield"

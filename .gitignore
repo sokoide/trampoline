@@ -1,5 +1,5 @@
 # Build products
-trampolin_sample
+trampoline_sample
 *.o
 *.d
 

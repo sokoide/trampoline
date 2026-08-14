@@ -1,5 +1,5 @@
-#ifndef TRAMPOLIN_ST_H
-#define TRAMPOLIN_ST_H
+#ifndef TRAMPOLINE_ST_H
+#define TRAMPOLINE_ST_H
 
 /* A minimal cooperative user-thread API. Threads switch only when they yield. */
 

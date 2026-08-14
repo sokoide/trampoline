@@ -1,4 +1,4 @@
-# x86_64 cooperative threading sample.
+# x86_64 cooperative threading trampoline sample.
 # macOS は OrbStack の x64 Linux、ARM Linux は qemu-user、x86_64 Linux は native。
 
 HOST_OS := $(shell uname -s)
@@ -27,19 +27,19 @@ $(error 対応する実行経路がありません: x86_64 Linux、OrbStack、�
 endif
 
 ifeq ($(NATIVE_X64),1)
-trampolin_sample: st.c ctx.S main.c st.h ctx.h internal.h safe_helpers.h
+trampoline_sample: st.c ctx.S main.c st.h ctx.h internal.h safe_helpers.h
 	$(CC) $(CFLAGS) st.c ctx.S main.c -o $@
-build: trampolin_sample
-run: trampolin_sample
+build: trampoline_sample
+run: trampoline_sample
 	@echo "[route: $(ROUTE)]"
-	./trampolin_sample
+	./trampoline_sample
 else ifeq ($(CROSS_QEMU),1)
-trampolin_sample: st.c ctx.S main.c st.h ctx.h internal.h safe_helpers.h
+trampoline_sample: st.c ctx.S main.c st.h ctx.h internal.h safe_helpers.h
 	$(CC) $(CFLAGS) st.c ctx.S main.c -o $@
-build: trampolin_sample
-run: trampolin_sample
+build: trampoline_sample
+run: trampoline_sample
 	@echo "[route: $(ROUTE)]"
-	$(RUN) ./trampolin_sample
+	$(RUN) ./trampoline_sample
 else
 build run:
 	@echo "[route: $(ROUTE)]"
@@ -57,7 +57,7 @@ linux-machines:
 	fi
 
 clean:
-	rm -f trampolin_sample
+	rm -f trampoline_sample
 
 help:
 	@echo 'make build  x86_64 バイナリをビルド'

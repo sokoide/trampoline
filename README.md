@@ -1,6 +1,8 @@
-# trampolin
+# trampoline
 
-x86_64 向けの小さな cooperative threading サンプルです。`trampolin` は、
+English version: [README_en.md](README_en.md)
+
+x86_64 向けの小さな cooperative threading サンプルです。`trampoline` は、
 新しいスレッドへ最初に制御を渡すとき、初期スタックに置いた戻り先へ
 `ret` する仕組みを観察するための教材です。
 
@@ -17,11 +19,12 @@ x86_64 向けの小さな cooperative threading サンプルです。`trampolin`
 
 ## 目次
 
-1. [動作](#動作)
-2. [API](#api)
-3. [コンテキストスイッチ](#コンテキストスイッチ)
-4. [ビルドと実行](#ビルドと実行)
-5. [gdb で観察する](#gdb-で観察する)
+1. [前提知識](#前提知識)
+2. [動作](#動作)
+3. [API](#api)
+4. [コンテキストスイッチ](#コンテキストスイッチ)
+5. [ビルドと実行](#ビルドと実行)
+6. [gdb で観察する](#gdb-で観察する)
 
 ## 動作
 
@@ -103,7 +106,7 @@ trampoline はスケジューラではありません。**低レベルの contex
 
 ```c
 sp = align_down(stack + 64 * 1024, 16);
-*--sp = 0;                    // ABI alignment word; invalid fallback if trampoline returns
+*--sp = 0;                    // ABI 用の padding。trampoline が return すれば無効な戻り先
 *--sp = (uint64_t)trampoline; // 最初の ret の行き先
 thread->ctx.rsp = (uint64_t)sp;
 ```
@@ -114,7 +117,7 @@ thread->ctx.rsp = (uint64_t)sp;
 ```text
 高いアドレス
 ┌────────────────────────────┐  stack + 64 KiB を16バイト境界に丸めた位置
-│ 0                          │  ← ABI alignment word（通常経路では使わない）
+│ 0                          │  ← ABI 用 padding（通常経路では使わない）
 ├────────────────────────────┤
 │ &trampoline                │  ← thread->ctx.rsp が指す位置
 └────────────────────────────┘
@@ -124,6 +127,13 @@ thread->ctx.rsp = (uint64_t)sp;
 `ctx.rsp` は `&trampoline` を指します。通常の `call trampoline` は使いません。
 次のコンテキストを復元した `st_ctx_swap` が、その位置から `ret` することで
 `&trampoline` を取り出し、直接 trampoline へジャンプします。
+
+`0` は trampoline の通常の戻り先ではありません。`ret` が `&trampoline` を pop
+した直後、`rsp` はこの `0` を指します。これにより trampoline 関数の入口で
+`rsp % 16 == 8` となり、System V AMD64 ABI のアライメントを満たします。
+trampoline は `fn` の復帰後に `_exit(0)` を呼ぶため、正常な実行ではこの `0` を
+使いません。もし trampoline が誤って return すれば、`ret` がアドレス 0 へ飛ぼうと
+して異常終了します。
 
 ### 2. 最初のコンテキストスイッチ
 
@@ -149,7 +159,7 @@ sequenceDiagram
 
 この最初の `ret` は、通常の関数から戻るための `ret` ではありません。A の
 スタックにあらかじめ置いた `&trampoline` を戻りアドレスとして利用しています。
-これが trampolin の要点です。
+これが trampoline の要点です。
 
 trampoline は引数を受け取りません。`st_ctx_swap` の `ret` は call 命令なしで
 飛び込み、引数レジスタを準備しません。この実装では `rdi` などの caller-saved
@@ -299,12 +309,14 @@ make run
 ## gdb で観察する
 
 `-O0` + `-fno-omit-frame-pointer` + `-fno-optimize-sibling-calls` は、この観察の
-ための設定です。gdb は x86_64 Linux 環境で実行してください。macOS ホスト上の
-gdb は動作しないため、OrbStack の VM 内や x86_64 Linux マシンで実行します。
+ための設定です。このサンプルは x86_64 Linux バイナリなので、gdb も x86_64 Linux
+環境で実行してください。macOS では OrbStack の VM を使います。VM に gdb がない
+場合は、先に `scripts/in-linux.sh x64-linux-env "apt-get update && apt-get install -y gdb"`
+を実行します。
 
 ```sh
 make build
-scripts/in-linux.sh x64-linux-env "gdb -q ./trampolin_sample"
+scripts/in-linux.sh x64-linux-env "gdb -q ./trampoline_sample"
 ```
 
 ### 最初の trampoline 到着
@@ -323,8 +335,9 @@ scripts/in-linux.sh x64-linux-env "gdb -q ./trampolin_sample"
   (`rsp % 16 == 8`)
 - `x/gx $rsp` の値が `0x0` — 初期スタックに置いた alignment word。
   `&trampoline` はすでに `ret` が消費した直下にある
-- `bt` はまともなバックトレースを返しません。trampoline はどの関数からも
-  `call` されていないためで、これ自体が「呼ばれていない入口」の証拠です
+- `bt` は通常の caller 連鎖を示しません。GDB のバージョンによって trampoline
+  だけを示すか、途中でバックトレースが途切れます。trampoline はどの関数からも
+  `call` されていないためです
 
 `break trampoline` でシンボルが解決しない場合は `break st.c:trampoline` を
 使ってください。
@@ -333,14 +346,16 @@ scripts/in-linux.sh x64-linux-env "gdb -q ./trampolin_sample"
 
 ```text
 (gdb) break st_ctx_swap
+(gdb) run
 (gdb) continue
 (gdb) bt
 (gdb) x/gx $rsp
 (gdb) info symbol *(void**)$rsp
 ```
 
-`continue` を数回繰り返して 2 周目以降の yield で止めると、`st_ctx_swap` は
-通常の `call` 連鎖の末尾にいます。
+`run` で最初に止まるのは main から A へ移る最初の切替えです。この時点では
+`st_start()` の呼出し連鎖にいます。1 回 `continue` すると、A が yield して B へ
+切り替える通常の `call` 連鎖の末尾で止まります。
 
 - `bt` に `st_ctx_swap` ← `switch_to_next` ← `st_yield` ← `worker` の連鎖が
   見えます。「3. yield 中の戻りアドレス」の図に対応します
