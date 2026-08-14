@@ -6,7 +6,10 @@
 
 /* The minimal state needed for a context switch.
  *
- * Under the System V AMD64 ABI, these seven registers must survive a call:
+ * Under the System V AMD64 ABI, the callee-saved registers rbp, rbx, and
+ * r12-r15 must survive a call, and rsp must be restored by the time the
+ * callee returns. A context switch therefore saves and restores all of
+ * these seven registers:
  *
  *     rsp (stack pointer)
  *     rbp, rbx, r12, r13, r14, r15

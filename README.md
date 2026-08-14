@@ -89,7 +89,7 @@ trampoline はスケジューラではありません。**低レベルの contex
 
 ```text
 1. st_thread_create() が初期スタックに trampoline のアドレスを置く
-2. st_start() が st_ctx_swap() で新しいスタックへ rsp を切り替える
+2. st_start() が switch_to_next() 経由で st_ctx_swap() を呼び、rsp を新しいスタックへ切り替える
 3. st_ctx_swap() の ret が trampoline へジャンプする
 4. trampoline が current の fn(arg) を通常の call で呼ぶ
 5. fn が yield すると、以後は通常の context switch として動く
@@ -137,8 +137,8 @@ trampoline は `fn` の復帰後に `_exit(0)` を呼ぶため、正常な実行
 
 ### 2. 最初のコンテキストスイッチ
 
-`main()` が `st_start()` を呼ぶと、ready queue の先頭 (A) を選び、現在の
-main のコンテキストを保存して A のコンテキストを復元します。
+`main()` が `st_start()` を呼ぶと、その内部の `switch_to_next()` が ready queue の
+先頭 (A) を選び、現在の main のコンテキストを保存して A のコンテキストを復元します。
 
 ```mermaid
 sequenceDiagram
@@ -182,13 +182,13 @@ saved `rbp`、ローカル変数、アラインメント用の領域も混在し
 ```text
  A のスタック（yield 中の戻りアドレスだけを表示）
  高いアドレス
- ┌────────────────────────────────────┐
- │ worker へ戻るアドレス (st_yield への call)           │
- ├────────────────────────────────────┤
- │ st_yield へ戻るアドレス (switch_to_next への call)  │
- ├────────────────────────────────────┤
- │ switch_to_next へ戻るアドレス (st_ctx_swap への call) │ ← 現在の rsp
- └────────────────────────────────────┘
+ ┌──────────────────────────────────────────
+ │ worker へ戻るアドレス (st_yield への call)
+ ├──────────────────────────────────────────
+ │ st_yield へ戻るアドレス (switch_to_next への call)
+ ├──────────────────────────────────────────
+ │ switch_to_next へ戻るアドレス (st_ctx_swap への call) ← 現在の rsp
+ └──────────────────────────────────────────
  低いアドレス
 ```
 
@@ -250,9 +250,11 @@ saved `rbp`、ローカル変数、パディングを含む完全な物理レイ
 ### 4. 保存するレジスタ
 
 `st_ctx_swap` が保存するのは `rsp`、`rbp`、`rbx`、`r12`〜`r15` だけです。
-System V AMD64 ABI ではこれらが callee-saved だからです。`st_ctx_swap` は通常の
-関数呼び出し境界で呼ばれるため、caller-saved レジスタは C コンパイラ側の責任で
-あり、この小さな切り替え処理では保存しません。
+`rbp`、`rbx`、`r12`〜`r15` は System V AMD64 ABI の callee-saved です。`rsp` は
+分類上 callee-saved ではありませんが、関数呼び出しをまたいで論理的に復元される
+ため、一緒に保存します。`st_ctx_swap` は通常の関数呼び出し境界で呼ばれるため、
+caller-saved レジスタは C コンパイラ側の責任であり、この小さな切り替え処理では
+保存しません。
 
 ```text
 prev->ctx に保存: rsp, rbp, rbx, r12, r13, r14, r15
@@ -334,7 +336,7 @@ scripts/in-linux.sh x64-linux-env "gdb -q ./trampoline_sample"
 - `p/x $rsp` のアドレス下位 1 桁が `8` — 関数入口の ABI アライメント
   (`rsp % 16 == 8`)
 - `x/gx $rsp` の値が `0x0` — 初期スタックに置いた alignment word。
-  `&trampoline` はすでに `ret` が消費した直下にある
+  `&trampoline` は現在の `rsp` より 8 バイト下 (ret が消費した位置) にありました
 - `bt` は通常の caller 連鎖を示しません。GDB のバージョンによって trampoline
   だけを示すか、途中でバックトレースが途切れます。trampoline はどの関数からも
   `call` されていないためです

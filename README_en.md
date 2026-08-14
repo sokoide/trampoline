@@ -90,7 +90,7 @@ context switch therefore uses this special path:
 
 ```text
 1. st_thread_create() places the trampoline address on the initial stack
-2. st_start() uses st_ctx_swap() to replace rsp with the new stack
+2. st_start() calls st_ctx_swap() (via switch_to_next()) to replace rsp with the new stack
 3. ret in st_ctx_swap() jumps to the trampoline
 4. the trampoline calls current->fn(current->arg) with a normal call
 5. after fn yields, later switches follow the normal context-switch path
@@ -138,8 +138,8 @@ and terminate abnormally.
 
 ### 2. The first context switch
 
-When `main()` calls `st_start()`, the scheduler selects the head of the ready queue
-(A), saves the main context, and restores A's context.
+When `main()` calls `st_start()`, the `switch_to_next()` inside it selects the head
+of the ready queue (A), saves the main context, and restores A's context.
 
 ```mermaid
 sequenceDiagram
@@ -251,10 +251,11 @@ These flags are also the basis for following the stack in gdb.
 ### 4. Saved registers
 
 `st_ctx_swap` saves only `rsp`, `rbp`, `rbx`, and `r12` through `r15`.
-Under the System V AMD64 ABI, these are the callee-saved registers. Because
-`st_ctx_swap` is reached through an ordinary function-call boundary, caller-saved
-registers are the caller's responsibility, and this small switch routine does not save
-them.
+Under the System V AMD64 ABI, `rbp`, `rbx`, and `r12`-`r15` are the callee-saved
+registers; `rsp` is not classified as callee-saved, but it is logically restored
+across a function call, so it is saved as well. Because `st_ctx_swap` is reached
+through an ordinary function-call boundary, caller-saved registers are the caller's
+responsibility, and this small switch routine does not save them.
 
 ```text
 save into prev->ctx:  rsp, rbp, rbx, r12, r13, r14, r15
