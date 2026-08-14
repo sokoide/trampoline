@@ -4,32 +4,29 @@
 #include <stddef.h> /* offsetof, _Static_assert */
 #include <stdint.h> /* uint64_t */
 
-/* コンテキストスイッチの「正体」を最小化した形。
+/* The minimal state needed for a context switch.
  *
- * System V AMD64 ABI では、関数呼び出しをまたいで「生きていなければなら
- * ない」レジスタ (callee-saved) は次の 7 本だけ:
+ * Under the System V AMD64 ABI, these seven registers must survive a call:
  *
- *     rsp (スタックポインタ)
+ *     rsp (stack pointer)
  *     rbp, rbx, r12, r13, r14, r15
  *
- * 残りのレジスタ (rax, rcx, rdx, rsi, rdi, r8-r11 等、いわゆる caller-saved)
- * は「呼出元が退避すべきもの」であり、関数呼び出し境界を超えた時点で
- * 内容が失われてもよい (= 呼出側が期待してはいけない)。
+ * The other registers (rax, rcx, rdx, rsi, rdi, r8-r11, and so on) are
+ * caller-saved. A caller must save them if it needs their values after a call.
  *
- * st_yield() から呼ばれる st_ctx_swap() は普通の関数呼び出しなので、
- * この ABI 規則に乗れる。つまり「caller-saved は保存しない」でよい。
- * 保存すべきは上記 7 本だけ。これがコンテキストスイッチの最小構成。
+ * st_ctx_swap() is called like a normal function from st_yield(), so this ABI
+ * rule applies. We only need to save the seven registers listed above.
  *
- * 現コンテキストを保存し、次のコンテキストへ切り替える処理を、libc に
- * 頼らず手書き asm で実装する。引数順序は (prev, next)。
+ * This hand-written assembly saves the current context and switches to the
+ * next one without using libc. The argument order is (prev, next).
  */
 
-/* 保存されたコンテキスト。TCB に埋め込まれる。56 バイト。
- * 【重要】フィールドの並びとオフセットは ctx.S の即値オフセットと
- * 1 対 1 で対応する。並びを変えるときは ctx.S も同時に更新すること。 */
+/* Saved context embedded in the TCB. It is 56 bytes.
+ * Important: field order and offsets must match the constants in ctx.S.
+ * Update ctx.S too if this layout changes. */
 struct st_ctx {
     uint64_t
-        rsp; /* +0  スタックポインタ (call 命令が積んだ戻りアドレスを指す) */
+        rsp; /* +0  stack pointer, pointing to a call return address */
     uint64_t rbp; /* +8 */
     uint64_t rbx; /* +16 */
     uint64_t r12; /* +24 */
@@ -38,25 +35,25 @@ struct st_ctx {
     uint64_t r15; /* +48 */
 };
 
-/* ctx.S のオフセットと構造体レイアウトの整合性をコンパイル時に検証。
- * どちらかを書き換えて不一致になればビルドエラーで即座に気付ける。 */
+/* Check the layout against ctx.S at compile time.
+ * A mismatch becomes a build error immediately. */
 _Static_assert(sizeof(struct st_ctx) == 56, "st_ctx must be 56 bytes");
 _Static_assert(offsetof(struct st_ctx, rsp) == 0, "rsp must be at offset 0");
 _Static_assert(offsetof(struct st_ctx, r15) == 48, "r15 must be at offset 48");
 
-/* 現コンテキストを *prev に保存し、*next のコンテキストへ切り替える。
- * 実装は ctx.S。
+/* Save the current context in *prev and switch to *next.
+ * The implementation is in ctx.S.
  *
  *   st_ctx_swap(prev, next)
- *     rdi = prev (保存先: 現スレッドの ctx)
- *     rsi = next (復元元: 次スレッドの ctx)
+ *     rdi = prev (save destination: current thread's ctx)
+ *     rsi = next (restore source: next thread's ctx)
  *
- * 戻り時には next 側のコンテキストに完全に入れ替わっている。
- * 「戻る」とは、next->rsp が指す戻りアドレスへの jmp にすぎない。
+ * On return, the next context is active. Returning is just a jump to the
+ * return address pointed to by next->rsp.
  *
- * st_ctx_swap はインライン展開されてはならない (caller-saved が dead となる
- * 「本当の関数呼出し境界」を生成するため)。宣言が out-of-line 関数なので、
- * 最適化に関わらず呼出規約通りに振る舞う。 */
+ * st_ctx_swap must remain an out-of-line function so the compiler creates a
+ * real call boundary. Its declaration and assembly implementation enforce
+ * the normal calling convention even when optimization is enabled. */
 void st_ctx_swap(struct st_ctx* prev, struct st_ctx* next);
 
-#endif /* COOP_CTX_H */
+#endif /* TRAMPOLIN_CTX_H */

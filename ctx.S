@@ -1,43 +1,38 @@
-/* コンテキストスイッチの実体 (x86_64 System V ABI, Intel 構文)。
+/* The context switch implementation (x86_64 System V ABI, Intel syntax).
  *
- * これが「スレッド切替」の正体そのもの。特別なカーネル機能は一切使わない。
- * やっていることは:
- *   1. 現在の callee-saved レジスタを prev 構造体へ退避
- *   2. rsp を next->rsp に差し替える   ← ★ ここで「実行者」が切り替わる
- *   3. next 構造体から callee-saved を復元
- *   4. ret で next->rsp が指す戻りアドレスへジャンプ
+ * This is the actual thread switch. It uses no special kernel feature.
+ * It does four things:
+ *   1. Save the current callee-saved registers into prev.
+ *   2. Replace rsp with next->rsp. This changes the active stack.
+ *   3. Restore the callee-saved registers from next.
+ *   4. Use ret to jump to the address at next->rsp.
  *
- * なぜこれだけで済むのか:
- *   - st_ctx_swap は普通の `call` 命令で呼ばれる。call は戻りアドレスを
- *     スタックに積むので、現 rsp が指す先 = 「後で戻るべきアドレス」。
- *     これを prev->rsp に保存すれば、後で prev に戻すとき rsp を復元して
- *     ret するだけで元の場所に帰れる。
- *   - rbp/rbx/r12-r15 は ABI 上「呼出先が勝手に壊してはいけない」レジスタ
- *     (callee-saved)。だから保存対象。それ以外 (rax/rcx/rdx/rsi/rdi/r8-r11 等) は
- *     「呼出元が自分で保存すべき」レジスタ (caller-saved) で、st_ctx_swap 呼び出しの
- *     時点で既に dead であってよい。よって保存しない。
- *   - 【注意】SSE の xmm レジスタは保存しないが、協調モードではこれは正しい。
- *     System V AMD64 ABI では xmm0-15 は全て caller-saved であり、協調 yield は
- *     本関数への通常の call 境界で起きるため、生きている xmm は呼出元
- *     (= yield するスレッド) のコンパイラが退避する。だからここで保存しなくても
- *     FP 状態は壊れない。
- *     (厳密な ABI 準拠では MXCSR 制御ビットと x87 FCW も callee-saved だが、
- *     通常の整数・倍精度演算では影響しない。)
+ * Why is this enough?
+ *   - st_ctx_swap is called with an ordinary call instruction. The call pushes
+ *     a return address, so the current rsp points to the place to resume.
+ *     Saving it in prev->rsp lets a later ret resume the old thread.
+ *   - rbp/rbx/r12-r15 are callee-saved by the ABI, so they must be saved.
+ *     Registers such as rax, rcx, rdx, rsi, rdi, and r8-r11 are caller-saved;
+ *     the caller cannot expect their values to survive this call.
+ *   - SSE xmm0-xmm15 are also caller-saved under the System V AMD64 ABI.
+ *     Since yield happens at a normal call boundary, the compiler handles any
+ *     live values. MXCSR and the x87 control word are stricter ABI details;
+ *     ordinary integer and double-precision code does not modify them.
  *
- * 引数順序は (prev, next): prev に保存し、next から復元する。
+ * The argument order is (prev, next): save into prev and restore from next.
  *
- * Intel 構文 (mov dest, src) を使う。GNU as は .intel_syntax noprefix で
- * 切り替える。コメント中のレジスタ名も Intel 表記 (rax/rsp 等) で統一。
+ * This file uses Intel syntax (mov dest, src). GNU as enables it with
+ * .intel_syntax noprefix. Register names in comments also use Intel syntax.
  */
     .intel_syntax noprefix
     .text
     .globl st_ctx_swap
     .type  st_ctx_swap, @function
 st_ctx_swap:
-    /* rdi = prev (保存先), rsi = next (復元元)
-     * call 命令が戻りアドレスを push 済み。現 rsp はそれを指す。 */
+    /* rdi = prev (save destination), rsi = next (restore source).
+     * The call has pushed a return address, so rsp points to it. */
 
-    /* --- prev (rdi) へ現コンテキストを保存 --- */
+    /* --- Save the current context into prev (rdi). --- */
     mov     [rdi +  0], rsp       /* prev->rsp = rsp */
     mov     [rdi +  8], rbp
     mov     [rdi + 16], rbx
@@ -46,7 +41,7 @@ st_ctx_swap:
     mov     [rdi + 40], r14
     mov     [rdi + 48], r15
 
-    /* --- next (rsi) からコンテキストを復元 --- */
+    /* --- Restore the next context from next (rsi). --- */
     mov     rsp, [rsi +  0]       /* rsp = next->rsp */
     mov     rbp, [rsi +  8]
     mov     rbx, [rsi + 16]
@@ -55,10 +50,13 @@ st_ctx_swap:
     mov     r14, [rsi + 40]
     mov     r15, [rsi + 48]
 
-    ret                            /* next->rsp が指す戻りアドレスへジャンプ */
+    ret                            /* Jump to the return address at next->rsp. */
+    /* Record the byte length of st_ctx_swap for the object-file symbol table.
+     * `.` is the current address after `ret`, so `.-st_ctx_swap` is the
+     * distance from the function's first instruction to this point. It does
+     * not emit a machine instruction and has no effect on the context switch. */
     .size  st_ctx_swap, .-st_ctx_swap
 
-/* 明示的に non-executable stack を宣言。これが無いとリンカが
- *「アセンブリソース由来で .note.GNU-stack が無い = 実行可能スタック」
- * と解釈して警告を出す（現代のセキュリティ要件では NG）。 */
+/* Mark the stack as non-executable. Without this note, the linker may warn
+ * that assembly code has an executable stack. */
     .section .note.GNU-stack,"",@progbits

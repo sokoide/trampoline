@@ -33,45 +33,42 @@ static struct st_thread* ready_pop(void) {
     return thread;
 }
 
-/* 共通の切替ロジック。実行可能スレッドが無ければ異常扱いで _exit(1)。
- * exit() は atexit handler と stdio の後始末を実行する。この最小ランタイムは
- * それらとの相互作用を定義しないため、_exit() で直ちに終了する。 */
+/* Pick the next thread. If none is ready, stop with an error.
+ * exit() runs atexit handlers and stdio cleanup. This small runtime does not
+ * define how those interact with its stacks, so it uses _exit() instead. */
 static void switch_to_next(void) {
     struct st_thread* next = ready_pop();
     if (next == NULL)
         _exit(1);
 
-    /* current は st_ctx_swap の【前】に更新する。新スレッドの最初の
-     * 切替えでは trampoline が起動するが、ret は引数を用意しない。
-     * rdi など caller-saved レジスタの値は任意であり、この最小コンテキスト
-     * には fn の引数を保存する場所もない。trampoline は current から
-     * 自分自身を知る。 */
+    /* Set current before st_ctx_swap. On a new thread, ret starts the
+     * trampoline without setting up arguments. Caller-saved registers such as
+     * rdi may contain anything, and this small context has no saved argument
+     * slots. The trampoline finds itself through current. */
     struct st_thread* previous = current;
     current = next;
     st_ctx_swap(&previous->ctx, &next->ctx);
 }
 
-/* 新スレッドの入口。st_ctx_swap の ret が最初に到達する場所。
- * ret は引数を設定しないため、グローバルの current から self を得て
- * fn(arg) を呼ぶ (switch_to_next のコメント参照)。fn が戻ったら
- * サンプルとしては役目終わりなので _exit(0) で終了する。 */
+/* Entry point for a new thread. st_ctx_swap reaches it with ret.
+ * ret does not set arguments, so use the global current to find self and
+ * call fn(arg). If fn returns, this sample has finished, so exit with _exit(0). */
 static void trampoline(void) {
     current->fn(current->arg);
     _exit(0);
 }
 
-/* 新スレッドの最初の ret 用フレームを構築する。
+/* Build the first ret frame for a new thread.
  *
- *   高位アドレス (stack + ST_STACK_BYTES)
- *     ... ↓ 16-byte 境界に切り下げ ...
- *     [top- 8] = 0            trampoline が誤って return した時の安全網
- *     [top-16] = &trampoline  st_ctx_swap の最初の ret 先
+ *   high address (stack + ST_STACK_BYTES)
+ *     ... round down to a 16-byte boundary ...
+ *     [top- 8] = 0            fallback if trampoline returns by mistake
+ *     [top-16] = &trampoline  first ret target of st_ctx_swap
  *                 ^
  *                 thread->ctx.rsp
  *
- * ctx.rsp = top-16 なので 16-byte 整列。ret 後の trampoline 入口では
- * rsp = top-8、すなわち System V AMD64 の関数入口規約どおり
- * rsp % 16 == 8 になる。 */
+ * ctx.rsp is top-16, so it is 16-byte aligned. After ret, trampoline starts
+ * with rsp = top-8, which gives the System V AMD64 entry alignment rsp % 16 == 8. */
 static void setup_stack(struct st_thread* thread) {
     uint64_t* sp = (uint64_t*)(((uintptr_t)thread->stack + ST_STACK_BYTES) &
                                ~(uintptr_t)15);
@@ -84,9 +81,8 @@ void st_init(void) {
     current = &main_thread;
 }
 
-/* TCB と専用スタックを作り、ready queue の末尾に置く。OS にスレッド
- * 作成を依頼しない。実行が始まるのは st_start() で最初の切替えが
- * 起きたとき。 */
+/* Create a TCB and private stack, then append it to the ready queue.
+ * No OS thread is created. Execution starts at the first switch in st_start(). */
 void st_thread_create(st_fn fn, void* arg) {
     if (fn == NULL)
         _exit(1);
@@ -106,8 +102,8 @@ void st_thread_create(st_fn fn, void* arg) {
     ready_push(thread);
 }
 
-/* main を離れ、ready queue の先頭スレッドへ制御を移す。
- * main_thread は ready queue に入らないため、main へ戻る経路はない。 */
+/* Leave main and switch to the first thread in the ready queue.
+ * main_thread is never queued, so control never returns to main. */
 void st_start(void) {
     switch_to_next();
     __builtin_unreachable();

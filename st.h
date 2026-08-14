@@ -1,7 +1,7 @@
 #ifndef TRAMPOLIN_ST_H
 #define TRAMPOLIN_ST_H
 
-/* 最小の cooperative user-thread API。スレッドは自発的な yield でだけ切り替わる。 */
+/* A minimal cooperative user-thread API. Threads switch only when they yield. */
 
 typedef void* (*st_fn)(void* arg);
 
