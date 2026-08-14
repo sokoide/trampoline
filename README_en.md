@@ -4,6 +4,25 @@ A small cooperative-threading sample for x86_64. `trampolin` is a teaching examp
 for observing how control first enters a new thread by executing `ret` to an address
 placed on its initial stack.
 
+## Prerequisites
+
+The text assumes the following three points. Each is explained again where needed,
+but look them up first if the terms are unfamiliar.
+
+- An x86_64 `call` pushes a return address onto the stack, and `ret` pops it and
+  jumps to it
+- The stack grows from higher addresses toward lower addresses
+- The System V AMD64 ABI splits registers into callee-saved (`rbp`, `rbx`,
+  `r12`-`r15`) and caller-saved (`rax`, `rcx`, `rdx`, `rsi`, `rdi`, `r8`-`r11`, etc.)
+
+## Table of contents
+
+1. [Behavior](#behavior)
+2. [API](#api)
+3. [Context switch](#context-switch)
+4. [Build and run](#build-and-run)
+5. [Observing with gdb](#observing-with-gdb)
+
 ## Behavior
 
 `main()` initializes the runtime, creates three threads (A, B, and C), and calls
@@ -29,6 +48,24 @@ and explains why one complete rotation takes three seconds.
 - `st_start()` — perform the first switch to the head of the ready queue
 - `st_yield()` — append the current thread to the end of the queue and switch to the next thread
 
+### TCB (Thread Control Block)
+
+Each thread is represented by a `struct st_thread` ([`internal.h`](internal.h)),
+called its TCB. No OS thread is ever created: a thread is just this structure plus
+its private stack.
+
+```c
+struct st_thread {
+    struct st_ctx ctx;          /* save/restore area of st_ctx_swap (rsp/rbp/rbx/r12-r15) */
+    void* stack;                /* private stack (64 KiB) */
+    st_fn fn;                   /* thread entry function */
+    void* arg;                  /* argument passed to fn */
+    struct st_thread* next;     /* next link in the ready queue */
+};
+```
+
+In the rest of this README, "A's context" means the `ctx` field of A's TCB.
+
 ## Context switch
 
 [`ctx.S`](ctx.S) contains the actual `st_ctx_swap` implementation. It saves and
@@ -41,10 +78,7 @@ replace rsp with next's stack pointer
 ret to next's continuation address
 ```
 
-For a new thread, the address of `trampoline` is placed on its stack. Therefore the
-first context switch also starts the trampoline, which then calls `fn(arg)`.
-
-### First: how the trampoline works
+### What the trampoline is
 
 The trampoline is not the scheduler. It is a **small entry function that passes control
 from the low-level context switch to an ordinary C function**. A new thread has not
@@ -263,3 +297,55 @@ make run
 
 `ctx.S` uses GNU assembler Intel syntax. On macOS, build through the x86_64 Linux route
 instead of assembling it directly on the host.
+
+## Observing with gdb
+
+The `-O0` + `-fno-omit-frame-pointer` + `-fno-optimize-sibling-calls` flags exist for
+this observation. Run gdb inside an x86_64 Linux environment; gdb on a macOS host does
+not work, so use the OrbStack VM or an x86_64 Linux machine.
+
+```sh
+make build
+scripts/in-linux.sh x64-linux-env "gdb -q ./trampolin_sample"
+```
+
+### First arrival at the trampoline
+
+```text
+(gdb) break trampoline
+(gdb) run
+(gdb) p/x $rsp
+(gdb) x/gx $rsp
+(gdb) bt
+```
+
+Execution stops right after `ret` has popped `&trampoline`, and you can confirm:
+
+- `p/x $rsp` ends in `...8` — the ABI entry alignment for a function
+  (`rsp % 16 == 8`)
+- `x/gx $rsp` shows `0x0` — the alignment word placed on the initial stack.
+  `&trampoline` sat just below it and was already consumed by `ret`
+- `bt` does not produce a usable backtrace, because no function ever `call`ed the
+  trampoline. That itself is the evidence of an "uncalled entry point"
+
+If `break trampoline` does not resolve the symbol, use `break st.c:trampoline`.
+
+### Return addresses during yield
+
+```text
+(gdb) break st_ctx_swap
+(gdb) continue
+(gdb) bt
+(gdb) x/gx $rsp
+(gdb) info symbol *(void**)$rsp
+```
+
+Repeat `continue` a few times and stop at a second-or-later rotation: there
+`st_ctx_swap` sits at the end of an ordinary call chain.
+
+- `bt` shows the chain `st_ctx_swap` <- `switch_to_next` <- `st_yield` <- `worker`,
+  matching the diagram in "3. Return addresses during yield"
+- `x/gx $rsp` is the return address to `st_ctx_swap`'s caller; `info symbol`
+  confirms it lies inside `switch_to_next`
+
+Stop the program with `Ctrl-C` and leave gdb with `quit`.

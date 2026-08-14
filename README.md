@@ -4,6 +4,25 @@ x86_64 向けの小さな cooperative threading サンプルです。`trampolin`
 新しいスレッドへ最初に制御を渡すとき、初期スタックに置いた戻り先へ
 `ret` する仕組みを観察するための教材です。
 
+## 前提知識
+
+次の 3 点を前提とします。いずれも本文で必要になったときに改めて説明しますが、
+言葉の意味がわからない場合は先に確認してください。
+
+- x86_64 の `call` は「呼び出し元へ戻るアドレス」をスタックへ push し、`ret` は
+  それを pop してジャンプする
+- スタックはアドレスが高い方向から低い方向へ成長する
+- System V AMD64 ABI はレジスタを callee-saved (`rbp`、`rbx`、`r12`〜`r15`) と
+  caller-saved (`rax`、`rcx`、`rdx`、`rsi`、`rdi`、`r8`〜`r11` など) に分ける
+
+## 目次
+
+1. [動作](#動作)
+2. [API](#api)
+3. [コンテキストスイッチ](#コンテキストスイッチ)
+4. [ビルドと実行](#ビルドと実行)
+5. [gdb で観察する](#gdb-で観察する)
+
 ## 動作
 
 `main()` はランタイムを初期化し、A、B、C の 3 スレッドを生成してから
@@ -29,6 +48,23 @@ cooperative threading の本質的な制限です (1 ループに 3 秒かかる
 - `st_start()` — ready queue の先頭スレッドへ最初の切り替えを行う
 - `st_yield()` — 現在のスレッドを queue の末尾へ戻し、次へ切り替え
 
+### TCB (Thread Control Block)
+
+各スレッドは TCB と呼ぶ `struct st_thread` ([`internal.h`](internal.h)) で表します。
+OS スレッドは 1 つも作りません。スレッドの実体はこの構造体と専用スタックです。
+
+```c
+struct st_thread {
+    struct st_ctx ctx;          /* st_ctx_swap の保存先・復元先 (rsp/rbp/rbx/r12-r15) */
+    void* stack;                /* 専用スタック (64 KiB) */
+    st_fn fn;                   /* スレッドの開始関数 */
+    void* arg;                  /* fn へ渡す引数 */
+    struct st_thread* next;     /* ready queue の次のリンク */
+};
+```
+
+以降の説明で「A のコンテキスト」は A の TCB の `ctx` フィールドを指します。
+
 ## コンテキストスイッチ
 
 [`ctx.S`](ctx.S) の `st_ctx_swap` が切り替えの本体です。x86_64 の callee-saved
@@ -41,11 +77,7 @@ rsp を next のスタックへ差し替え
 ret で next の戻り先へ移動
 ```
 
-新規スレッドでは、スタック上に `trampoline` のアドレスを初期配置します。
-そのため最初の切り替えでも trampoline が起動し、そこから `fn(arg)` が
-呼ばれます。
-
-### まず trampoline の仕組み
+### trampoline とは何か
 
 trampoline はスケジューラではありません。**低レベルの context switch から、
 通常の C 関数へ制御を渡すための短い入口関数**です。新しいスレッドを開始するとき、
@@ -263,3 +295,56 @@ make run
 
 `ctx.S` は GNU assembler の Intel 構文を使用します。macOS ホスト上で直接
 アセンブルするのではなく、x86_64 Linux 経路でビルドしてください。
+
+## gdb で観察する
+
+`-O0` + `-fno-omit-frame-pointer` + `-fno-optimize-sibling-calls` は、この観察の
+ための設定です。gdb は x86_64 Linux 環境で実行してください。macOS ホスト上の
+gdb は動作しないため、OrbStack の VM 内や x86_64 Linux マシンで実行します。
+
+```sh
+make build
+scripts/in-linux.sh x64-linux-env "gdb -q ./trampolin_sample"
+```
+
+### 最初の trampoline 到着
+
+```text
+(gdb) break trampoline
+(gdb) run
+(gdb) p/x $rsp
+(gdb) x/gx $rsp
+(gdb) bt
+```
+
+`ret` が `&trampoline` を pop した直後に止まるので、次のことが確認できます。
+
+- `p/x $rsp` のアドレス下位 1 桁が `8` — 関数入口の ABI アライメント
+  (`rsp % 16 == 8`)
+- `x/gx $rsp` の値が `0x0` — 初期スタックに置いた alignment word。
+  `&trampoline` はすでに `ret` が消費した直下にある
+- `bt` はまともなバックトレースを返しません。trampoline はどの関数からも
+  `call` されていないためで、これ自体が「呼ばれていない入口」の証拠です
+
+`break trampoline` でシンボルが解決しない場合は `break st.c:trampoline` を
+使ってください。
+
+### yield 中の戻りアドレス
+
+```text
+(gdb) break st_ctx_swap
+(gdb) continue
+(gdb) bt
+(gdb) x/gx $rsp
+(gdb) info symbol *(void**)$rsp
+```
+
+`continue` を数回繰り返して 2 周目以降の yield で止めると、`st_ctx_swap` は
+通常の `call` 連鎖の末尾にいます。
+
+- `bt` に `st_ctx_swap` ← `switch_to_next` ← `st_yield` ← `worker` の連鎖が
+  見えます。「3. yield 中の戻りアドレス」の図に対応します
+- `x/gx $rsp` が「`st_ctx_swap` の呼び出し元へ戻るアドレス」です。
+  `info symbol` で `switch_to_next` 内のアドレスであることを確認できます
+
+観察後は `Ctrl-C` でプログラムを止め、`quit` で gdb を終了します。
