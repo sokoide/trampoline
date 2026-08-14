@@ -62,7 +62,7 @@ static void trampoline(void) {
  *
  *   high address (stack + ST_STACK_BYTES)
  *     ... round down to a 16-byte boundary ...
- *     [top- 8] = 0            fallback if trampoline returns by mistake
+ *     [top- 8] = 0            alignment word; invalid fallback if trampoline returns
  *     [top-16] = &trampoline  first ret target of st_ctx_swap
  *                 ^
  *                 thread->ctx.rsp

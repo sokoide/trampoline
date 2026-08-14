@@ -45,6 +45,25 @@ ret で next の戻り先へ移動
 そのため最初の切り替えでも trampoline が起動し、そこから `fn(arg)` が
 呼ばれます。
 
+### まず trampoline の仕組み
+
+trampoline はスケジューラではありません。**低レベルの context switch から、
+通常の C 関数へ制御を渡すための短い入口関数**です。新しいスレッドを開始するとき、
+まだどの関数からも `call` されていないため、通常の関数のような戻りアドレスは
+スタックにありません。そこで、最初の context switch だけ次の特別な経路を使います。
+
+```text
+1. st_thread_create() が初期スタックに trampoline のアドレスを置く
+2. st_start() が st_ctx_swap() で新しいスタックへ rsp を切り替える
+3. st_ctx_swap() の ret が trampoline へジャンプする
+4. trampoline が current の fn(arg) を通常の call で呼ぶ
+5. fn が yield すると、以後は通常の context switch として動く
+```
+
+つまり trampoline は、**人工的に用意した最初の `ret` の行き先**と、
+**通常の `fn(arg)` の呼出し**の間をつなぐアダプターです。`fn` の引数をどこから
+取得するか、`fn` が戻ったらどう終了するかも、この入口に集約しています。
+
 ### 1. trampoline 用の初期スタック
 
 `st_thread_create()` は OS にスレッド作成を依頼しません。ヒープ上に TCB と
@@ -52,7 +71,7 @@ ret で next の戻り先へ移動
 
 ```c
 sp = align_down(stack + 64 * 1024, 16);
-*--sp = 0;                    // trampoline が戻った場合の番兵
+*--sp = 0;                    // ABI alignment word; invalid fallback if trampoline returns
 *--sp = (uint64_t)trampoline; // 最初の ret の行き先
 thread->ctx.rsp = (uint64_t)sp;
 ```
@@ -63,7 +82,7 @@ thread->ctx.rsp = (uint64_t)sp;
 ```text
 高いアドレス
 ┌────────────────────────────┐  stack + 64 KiB を16バイト境界に丸めた位置
-│ 0                          │  ← trampoline の戻り先用の番兵
+│ 0                          │  ← ABI alignment word（通常経路では使わない）
 ├────────────────────────────┤
 │ &trampoline                │  ← thread->ctx.rsp が指す位置
 └────────────────────────────┘

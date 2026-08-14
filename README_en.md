@@ -44,6 +44,25 @@ ret to next's continuation address
 For a new thread, the address of `trampoline` is placed on its stack. Therefore the
 first context switch also starts the trampoline, which then calls `fn(arg)`.
 
+### First: how the trampoline works
+
+The trampoline is not the scheduler. It is a **small entry function that passes control
+from the low-level context switch to an ordinary C function**. A new thread has not
+been called by any function yet, so its stack has no normal return address. The first
+context switch therefore uses this special path:
+
+```text
+1. st_thread_create() places the trampoline address on the initial stack
+2. st_start() uses st_ctx_swap() to replace rsp with the new stack
+3. ret in st_ctx_swap() jumps to the trampoline
+4. the trampoline calls current->fn(current->arg) with a normal call
+5. after fn yields, later switches follow the normal context-switch path
+```
+
+In other words, the trampoline is the adapter between the **artificial first `ret`
+target** and the **ordinary call to `fn(arg)`**. It also provides one place to find the
+function and its argument, and one place to handle the case where `fn` returns.
+
 ### 1. Initial stack for the trampoline
 
 `st_thread_create()` does not ask the OS to create a thread. It allocates a TCB and a
@@ -52,7 +71,7 @@ the stack.
 
 ```c
 sp = align_down(stack + 64 * 1024, 16);
-*--sp = 0;                    // sentinel if trampoline ever returns
+*--sp = 0;                    // ABI alignment word; invalid fallback if trampoline returns
 *--sp = (uint64_t)trampoline; // destination of the first ret
 thread->ctx.rsp = (uint64_t)sp;
 ```
@@ -62,7 +81,7 @@ The stack grows from higher addresses toward lower addresses, so its initial sta
 ```text
 high address
 ┌────────────────────────────┐  stack + 64 KiB, rounded down to a 16-byte boundary
-│ 0                          │  ← sentinel for trampoline's return
+│ 0                          │  ← ABI alignment word (not used normally)
 ├────────────────────────────┤
 │ &trampoline                │  ← location referenced by thread->ctx.rsp
 └────────────────────────────┘
