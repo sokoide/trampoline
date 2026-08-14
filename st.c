@@ -9,10 +9,6 @@
 static struct st_thread main_thread;
 static struct st_thread* current = &main_thread;
 
-/* Threads wait here until st_start() moves them to the ready queue. */
-static struct st_thread* pending_head;
-static struct st_thread* pending_tail;
-
 static struct st_thread* ready_head;
 static struct st_thread* ready_tail;
 
@@ -37,22 +33,45 @@ static struct st_thread* ready_pop(void) {
     return thread;
 }
 
+/* 共通の切替ロジック。実行可能スレッドが無ければ異常扱いで _exit(1)。
+ * _exit() を使うのは、exit() が atexit/destructor を走らせるため。
+ * それがユーザスレッドのスタック/TCB に触れると未定義動作になる。 */
 static void switch_to_next(void) {
     struct st_thread* next = ready_pop();
     if (next == NULL)
         _exit(1);
 
+    /* current は st_ctx_swap の【前】に更新する。新スレッドの最初の
+     * 切替えでは trampoline が起動するが、st_ctx_swap の ret は call
+     * 命令なしで飛び込むため通常の呼出規約 (rdi 経由の引数渡し) が
+     * 成立していない。trampoline は引数ではなくこの current から
+     * 自分自身を知る。 */
     struct st_thread* previous = current;
     current = next;
     st_ctx_swap(&previous->ctx, &next->ctx);
 }
 
-/* st_ctx_swap の ret が最初に到達する場所。 */
+/* 新スレッドの入口。st_ctx_swap の ret が最初に到達する場所。
+ * 引数を受け取れないため、グローバルの current から self を得て
+ * fn(arg) を呼ぶ (switch_to_next のコメント参照)。fn が戻ったら
+ * サンプルとしては役目終わりなので _exit(0) で終了する。 */
 static void trampoline(void) {
     current->fn(current->arg);
     _exit(0);
 }
 
+/* 新スレッドの最初の ret 用フレームを構築する。
+ *
+ *   高位アドレス (stack + ST_STACK_BYTES)
+ *     ... ↓ 16-byte 境界に切り下げ ...
+ *     [top- 8] = 0            trampoline が誤って return した時の安全網
+ *     [top-16] = &trampoline  st_ctx_swap の最初の ret 先
+ *                 ^
+ *                 thread->ctx.rsp
+ *
+ * ctx.rsp = top-16 なので 16-byte 整列。ret 後の trampoline 入口では
+ * rsp = top-8、すなわち System V AMD64 の関数入口規約どおり
+ * rsp % 16 == 8 になる。 */
 static void setup_stack(struct st_thread* thread) {
     uint64_t* sp = (uint64_t*)(((uintptr_t)thread->stack + ST_STACK_BYTES) &
                                ~(uintptr_t)15);
@@ -65,7 +84,10 @@ void st_init(void) {
     current = &main_thread;
 }
 
-void st_thread_start(st_fn fn, void* arg) {
+/* TCB と専用スタックを作り、ready queue の末尾に置く。OS にスレッド
+ * 作成を依頼しない。実行が始まるのは st_start() で最初の切替えが
+ * 起きたとき。 */
+void st_thread_create(st_fn fn, void* arg) {
     struct st_thread* thread = calloc(1, sizeof(*thread));
     if (thread == NULL)
         _exit(1);
@@ -78,20 +100,12 @@ void st_thread_start(st_fn fn, void* arg) {
     thread->arg = arg;
     setup_stack(thread);
 
-    thread->next = NULL;
-    if (pending_tail == NULL)
-        pending_head = thread;
-    else
-        pending_tail->next = thread;
-    pending_tail = thread;
+    ready_push(thread);
 }
 
+/* main を離れ、ready queue の先頭スレッドへ制御を移す。
+ * main_thread は ready queue に入らないため、main へ戻る経路はない。 */
 void st_start(void) {
-    while (pending_head != NULL) {
-        struct st_thread* thread = pending_head;
-        pending_head = thread->next;
-        ready_push(thread);
-    }
     switch_to_next();
     __builtin_unreachable();
 }

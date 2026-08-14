@@ -11,6 +11,8 @@ static void* worker(void* arg) {
     while (1) {
         snprintf(line, sizeof(line), "[%s] step %d\n", name, i++);
         safe_write_str(line);
+        /* 注意: sleep(1) は OS スレッド (プロセス全体) をブロックする。
+         * 協調スレッドでは A の sleep の間、B/C も動けない。 */
         sleep(1);
         st_yield();
     }
@@ -20,9 +22,9 @@ static void* worker(void* arg) {
 int main(void) {
     st_init();
 
-    st_thread_start(worker, "A");
-    st_thread_start(worker, "B");
-    st_thread_start(worker, "C");
+    st_thread_create(worker, "A");
+    st_thread_create(worker, "B");
+    st_thread_create(worker, "C");
 
     st_start();
 

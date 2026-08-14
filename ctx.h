@@ -20,9 +20,10 @@
  * この ABI 規則に乗れる。つまり「caller-saved は保存しない」でよい。
  * 保存すべきは上記 7 本だけ。これがコンテキストスイッチの最小構成。
  *
- * preemptive/ の swapcontext(&prev->uc, &next->uc) と同じ役割 (現コンテキスト
- * を保存し、次へ切替える) を、libc に頼らず手書き asm で実装した版。
- * 引数順序 (prev, next) も swapcontext に揃えてある。
+ * 兄弟教材 ../threading/completed/preemptive の swapcontext(&prev->uc,
+ * &next->uc) と同じ役割 (現コンテキストを保存し、次へ切替える) を、libc に
+ * 頼らず手書き asm で実装した版。引数順序 (prev, next) も swapcontext
+ * に揃えてある。
  */
 
 /* 保存されたコンテキスト。TCB に埋め込まれる。56 バイト。

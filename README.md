@@ -17,11 +17,16 @@ x86_64 向けの小さな cooperative threading サンプルです。`trampolin`
 スレッドは終了せず、A、B、C が FIFO 順に永遠に切り替わります。最初の
 `st_start()` の後に `main()` へ戻る経路はありません。
 
+`sleep(1)` は blocking syscall なので、OS スレッド (プロセス全体) を
+ブロックします。A の sleep の間、B と C は一切動けません。協調スレッド
+では yield 以外の任意のタイミングで切替えが起きないため、これが
+cooperative threading の本質的な制限です (1 ループに 3 秒かかる理由)。
+
 ## API
 
 - `st_init()` — main のコンテキストを初期化
-- `st_thread_start(fn, arg)` — TCB と専用スタックを作成するだけ
-- `st_start()` — 生成済みスレッドを ready queue に投入して実行開始
+- `st_thread_create(fn, arg)` — TCB と専用スタックを作り ready queue へ
+- `st_start()` — ready queue の先頭スレッドへ最初の切り替えを行う
 - `st_yield()` — 現在のスレッドを queue の末尾へ戻し、次へ切り替え
 
 ## コンテキストスイッチ
@@ -42,7 +47,7 @@ ret で next の戻り先へ移動
 
 ### 1. trampoline 用の初期スタック
 
-`st_thread_start()` は OS にスレッド作成を依頼しません。ヒープ上に TCB と
+`st_thread_create()` は OS にスレッド作成を依頼しません。ヒープ上に TCB と
 64 KiB のスタックを確保し、スタックの一番上に次の2ワードを手で作ります。
 
 ```c
@@ -71,9 +76,8 @@ thread->ctx.rsp = (uint64_t)sp;
 
 ### 2. 最初のコンテキストスイッチ
 
-`main()` が `st_start()` を呼ぶと、生成待ちリストの A、B、C を FIFO ready queue
-へ移します。A を選ぶと、現在の main のコンテキストを保存して A のコンテキストを
-復元します。
+`main()` が `st_start()` を呼ぶと、ready queue の先頭 (A) を選び、現在の
+main のコンテキストを保存して A のコンテキストを復元します。
 
 ```mermaid
 sequenceDiagram
@@ -96,18 +100,30 @@ sequenceDiagram
 スタックにあらかじめ置いた `&trampoline` を戻りアドレスとして利用しています。
 これが trampolin の要点です。
 
+trampoline は引数を受け取りません。`st_ctx_swap` の `ret` は call 命令なしで
+飛び込むため、rdi 経由で引数を渡す通常の呼出規約が成立していないからです。
+その代わり、切替えの直前にスケジューラが `current` グローバルを次のスレッド
+に設定済みなので、trampoline は `current->fn(current->arg)` と、このグローバル
+から自分自身を知ります (`st.c` の `switch_to_next` と `trampoline` のコメント
+参照)。
+
 ### 3. yield 中の戻りアドレス
 
-A の worker が `st_yield()` を呼ぶと、通常の C 関数呼び出しとして
-`st_ctx_swap()` が実行されます。CPU の `call` 命令は、次に実行すべき
-「`st_ctx_swap` の呼び出し元へ戻るアドレス」を現在のスタックへ push します。
+A の worker が `st_yield()` を呼ぶと、通常の C 関数呼び出しの連鎖として
+`st_yield()` → `switch_to_next()` → `st_ctx_swap()` と進みます。CPU の
+`call` 命令は呼び出すたびに「呼び出し元へ戻るアドレス」をスタックへ push
+するため、A のスタックには各呼び出しの戻りアドレスが積まれた状態です。
 
 ```text
  A のスタック（yield 中）
  高いアドレス
- ┌────────────────────────────┐
- │ st_yield() の呼び出し元へ戻るアドレス │ ← call が積んだ値
- └────────────────────────────┘  ← 現在の rsp
+ ┌────────────────────────────────────┐
+ │ worker へ戻るアドレス (st_yield への call)           │
+ ├────────────────────────────────────┤
+ │ st_yield へ戻るアドレス (switch_to_next への call)  │
+ ├────────────────────────────────────┤
+ │ switch_to_next へ戻るアドレス (st_ctx_swap への call) │ ← 現在の rsp
+ └────────────────────────────────────┘
  低いアドレス
 ```
 
@@ -123,16 +139,20 @@ sequenceDiagram
 
     A->>A: ready queue の末尾へ自分を追加
     A->>X: call st_ctx_swap(A.ctx, B.ctx)
-    Note over X: A.ctx.rsp = A の call の戻りアドレス
+    Note over X: A.ctx.rsp = st_ctx_swap の呼び出し元へ戻るアドレス
     X->>X: B の rsp と callee-saved レジスタを復元
     X->>B: ret
     B->>B: worker("B") の続き、または開始地点
     B->>B: st_yield()
 ```
 
+(図では st_yield が直接 st_ctx_swap を呼ぶ単純化を行っています。)
+
 B、C が yield した後に A が再び選ばれると、A の `rsp` と保存済みレジスタが
 復元されます。`ret` は A が以前 `st_ctx_swap` を呼んだ直後のアドレスへ戻るため、
-A の `st_yield()` が終了し、worker の次の命令から処理が続きます。
+そこから `switch_to_next()` と `st_yield()` の残りが順に return し、worker の
+次の命令から処理が続きます。復帰は複数の `ret` を辿るいつも通りの関数返りで、
+特別な仕組みは何もありません。
 
 ### 4. 保存するレジスタ
 
@@ -159,6 +179,18 @@ make run
 ```
 
 `make run` は無限に動作します。停止するには `Ctrl-C` を使います。
+実行すると、A、B、C が 1 秒間隔で FIFO 順に切り替わります
+(各スレッドの `sleep(1)` が直列に効くため、1 ループ 3 秒)。
+
+```text
+[A] step 0
+[B] step 0
+[C] step 0
+[A] step 1
+[B] step 1
+[C] step 1
+...
+```
 
 実行経路はホスト環境に応じて自動選択されます。
 
