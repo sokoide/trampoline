@@ -20,16 +20,11 @@
  *     System V AMD64 ABI では xmm0-15 は全て caller-saved であり、協調 yield は
  *     本関数への通常の call 境界で起きるため、生きている xmm は呼出元
  *     (= yield するスレッド) のコンパイラが退避する。だからここで保存しなくても
- *     FP 状態は壊れない。FP 保存問題は「実行の途中を非同期に割って切替える」
- *     プリエンプティブ版に固有である (兄弟教材 ../threading/completed/preemptive
- *     の on_sigvtalrm は fpregs を切替えない)。
+ *     FP 状態は壊れない。
  *     (厳密な ABI 準拠では MXCSR 制御ビットと x87 FCW も callee-saved だが、
  *     通常の整数・倍精度演算では影響しない。)
  *
- * 引数順序は swapcontext(oucp, ucp) と同じ (prev, next) に揃えてある。
- * プリエンプティブ版 (../threading/completed/preemptive) が libc の
- * swapcontext(&prev->uc, &next->uc) で同じ役割を果たすのと並行して
- * 読めるようにするため (教材の核)。
+ * 引数順序は (prev, next): prev に保存し、next から復元する。
  *
  * Intel 構文 (mov dest, src) を使う。GNU as は .intel_syntax noprefix で
  * 切り替える。コメント中のレジスタ名も Intel 表記 (rax/rsp 等) で統一。

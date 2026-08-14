@@ -7,6 +7,7 @@ ORBSTACK := $(shell command -v orbctl 2>/dev/null)
 NATIVE_X64 := $(if $(and $(filter Linux,$(HOST_OS)),$(filter x86_64,$(HOST_ARCH))),1,)
 CROSS_QEMU := $(if $(and $(filter Linux,$(HOST_OS)),$(filter-out x86_64,$(HOST_ARCH)),$(shell command -v x86_64-linux-gnu-gcc 2>/dev/null),$(shell command -v qemu-x86_64-static 2>/dev/null)),1,)
 LINUX_MACHINE := x64-linux-env
+CFLAGS ?= -std=c11 -Wall -Wextra -O0 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls
 
 .DEFAULT_GOAL := help
 .PHONY: all build run clean help linux-machines
@@ -27,14 +28,14 @@ endif
 
 ifeq ($(NATIVE_X64),1)
 trampolin_sample: st.c ctx.S main.c st.h ctx.h internal.h safe_helpers.h
-	$(CC) -std=c11 -Wall -Wextra -O2 -g $^ -o $@
+	$(CC) $(CFLAGS) st.c ctx.S main.c -o $@
 build: trampolin_sample
 run: trampolin_sample
 	@echo "[route: $(ROUTE)]"
 	./trampolin_sample
 else ifeq ($(CROSS_QEMU),1)
 trampolin_sample: st.c ctx.S main.c st.h ctx.h internal.h safe_helpers.h
-	$(CC) -std=c11 -Wall -Wextra -O2 -g $^ -o $@
+	$(CC) $(CFLAGS) st.c ctx.S main.c -o $@
 build: trampolin_sample
 run: trampolin_sample
 	@echo "[route: $(ROUTE)]"

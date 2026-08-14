@@ -34,17 +34,17 @@ static struct st_thread* ready_pop(void) {
 }
 
 /* 共通の切替ロジック。実行可能スレッドが無ければ異常扱いで _exit(1)。
- * _exit() を使うのは、exit() が atexit/destructor を走らせるため。
- * それがユーザスレッドのスタック/TCB に触れると未定義動作になる。 */
+ * exit() は atexit handler と stdio の後始末を実行する。この最小ランタイムは
+ * それらとの相互作用を定義しないため、_exit() で直ちに終了する。 */
 static void switch_to_next(void) {
     struct st_thread* next = ready_pop();
     if (next == NULL)
         _exit(1);
 
     /* current は st_ctx_swap の【前】に更新する。新スレッドの最初の
-     * 切替えでは trampoline が起動するが、st_ctx_swap の ret は call
-     * 命令なしで飛び込むため通常の呼出規約 (rdi 経由の引数渡し) が
-     * 成立していない。trampoline は引数ではなくこの current から
+     * 切替えでは trampoline が起動するが、ret は引数を用意しない。
+     * rdi など caller-saved レジスタの値は任意であり、この最小コンテキスト
+     * には fn の引数を保存する場所もない。trampoline は current から
      * 自分自身を知る。 */
     struct st_thread* previous = current;
     current = next;
@@ -52,7 +52,7 @@ static void switch_to_next(void) {
 }
 
 /* 新スレッドの入口。st_ctx_swap の ret が最初に到達する場所。
- * 引数を受け取れないため、グローバルの current から self を得て
+ * ret は引数を設定しないため、グローバルの current から self を得て
  * fn(arg) を呼ぶ (switch_to_next のコメント参照)。fn が戻ったら
  * サンプルとしては役目終わりなので _exit(0) で終了する。 */
 static void trampoline(void) {
@@ -88,6 +88,9 @@ void st_init(void) {
  * 作成を依頼しない。実行が始まるのは st_start() で最初の切替えが
  * 起きたとき。 */
 void st_thread_create(st_fn fn, void* arg) {
+    if (fn == NULL)
+        _exit(1);
+
     struct st_thread* thread = calloc(1, sizeof(*thread));
     if (thread == NULL)
         _exit(1);

@@ -101,11 +101,12 @@ sequenceDiagram
 これが trampolin の要点です。
 
 trampoline は引数を受け取りません。`st_ctx_swap` の `ret` は call 命令なしで
-飛び込むため、rdi 経由で引数を渡す通常の呼出規約が成立していないからです。
-その代わり、切替えの直前にスケジューラが `current` グローバルを次のスレッド
-に設定済みなので、trampoline は `current->fn(current->arg)` と、このグローバル
-から自分自身を知ります (`st.c` の `switch_to_next` と `trampoline` のコメント
-参照)。
+飛び込み、引数レジスタを準備しません。この実装では `rdi` などの caller-saved
+レジスタに fn や arg を保存していないため、trampoline は引数から TCB を得られ
+ません。その代わり、切替えの直前にスケジューラが `current` グローバルを次の
+スレッドに設定済みなので、trampoline は `current->fn(current->arg)` と、この
+グローバルから自分自身を知ります。別の実装なら、初期コンテキストに `rdi` を
+設定して trampoline へ引数を渡すこともできます。
 
 ### 3. yield 中の戻りアドレス
 
@@ -134,19 +135,21 @@ A の worker が `st_yield()` を呼ぶと、通常の C 関数呼び出しの�
 ```mermaid
 sequenceDiagram
     participant A as A
+    participant Y as st_yield
+    participant S as switch_to_next
     participant X as st_ctx_swap
     participant B as B
 
-    A->>A: ready queue の末尾へ自分を追加
-    A->>X: call st_ctx_swap(A.ctx, B.ctx)
+    A->>Y: st_yield()
+    Y->>S: switch_to_next()
+    S->>S: A を ready queue の末尾へ追加
+    S->>X: call st_ctx_swap(A.ctx, B.ctx)
     Note over X: A.ctx.rsp = st_ctx_swap の呼び出し元へ戻るアドレス
     X->>X: B の rsp と callee-saved レジスタを復元
     X->>B: ret
     B->>B: worker("B") の続き、または開始地点
     B->>B: st_yield()
 ```
-
-(図では st_yield が直接 st_ctx_swap を呼ぶ単純化を行っています。)
 
 B、C が yield した後に A が再び選ばれると、A の `rsp` と保存済みレジスタが
 復元されます。`ret` は A が以前 `st_ctx_swap` を呼んだ直後のアドレスへ戻るため、
@@ -177,6 +180,11 @@ next->ctx から復元: 同じ7個
 make build
 make run
 ```
+
+教材では呼出し連鎖とスタックを観察しやすくするため、`-O0`、frame pointer の
+保持、末尾呼出し最適化の無効化を指定しています。最適化を有効にすると、関数の
+インライン化や末尾呼出しにより「yield 中の戻りアドレス」の図と実際のフレーム数が
+一致しないことがあります。
 
 `make run` は無限に動作します。停止するには `Ctrl-C` を使います。
 実行すると、A、B、C が 1 秒間隔で FIFO 順に切り替わります
