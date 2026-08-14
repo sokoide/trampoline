@@ -26,14 +26,14 @@ $(error 対応する実行経路がありません: x86_64 Linux、OrbStack、�
 endif
 
 ifeq ($(NATIVE_X64),1)
-trampolin_sample: st.c rq.c ctx.S main.c st.h ctx.h internal.h rq.h safe_helpers.h
+trampolin_sample: st.c ctx.S main.c st.h ctx.h internal.h safe_helpers.h
 	$(CC) -std=c11 -Wall -Wextra -O2 -g $^ -o $@
 build: trampolin_sample
 run: trampolin_sample
 	@echo "[route: $(ROUTE)]"
 	./trampolin_sample
 else ifeq ($(CROSS_QEMU),1)
-trampolin_sample: st.c rq.c ctx.S main.c st.h ctx.h internal.h rq.h safe_helpers.h
+trampolin_sample: st.c ctx.S main.c st.h ctx.h internal.h safe_helpers.h
 	$(CC) -std=c11 -Wall -Wextra -O2 -g $^ -o $@
 build: trampolin_sample
 run: trampolin_sample
