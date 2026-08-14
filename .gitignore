@@ -1,0 +1,20 @@
+# Build products
+trampolin_sample
+*.o
+*.d
+
+# Debugger and coverage output
+*.dSYM/
+*.gcda
+*.gcno
+*.gcov
+
+# Editor and OS files
+.DS_Store
+.vscode/
+.idea/
+
+# Temporary files
+*.swp
+*.swo
+*~
