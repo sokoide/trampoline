@@ -46,7 +46,7 @@ and explains why one complete rotation takes three seconds.
 
 ## API
 
-- `st_init()` — initialize the main-thread context
+- `st_init()` — set the main thread as the currently running thread (current)
 - `st_thread_create(fn, arg)` — create a TCB and private stack, then append it to the ready queue
 - `st_start()` — perform the first switch to the head of the ready queue
 - `st_yield()` — append the current thread to the end of the queue and switch to the next thread
@@ -292,6 +292,12 @@ three seconds).
 [C] step 1
 ...
 ```
+
+Each worker formats its line with `snprintf` and writes it through
+`safe_write_str()` ([`safe_helpers.h`](safe_helpers.h)), which calls `write(2)`
+directly. stdio buffering carries process-wide state, so to avoid mechanisms
+unrelated to manual stack switching, this sample writes output immediately
+without buffering.
 
 The execution route is selected automatically for the host environment:
 

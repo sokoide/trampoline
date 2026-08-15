@@ -17,8 +17,9 @@
  * The other registers (rax, rcx, rdx, rsi, rdi, r8-r11, and so on) are
  * caller-saved. A caller must save them if it needs their values after a call.
  *
- * st_ctx_swap() is called like a normal function from st_yield(), so this ABI
- * rule applies. We only need to save the seven registers listed above.
+ * st_ctx_swap() is called like a normal function through the st_yield() call
+ * chain (st_yield -> switch_to_next -> st_ctx_swap), so this ABI rule
+ * applies. We only need to save the seven registers listed above.
  *
  * This hand-written assembly saves the current context and switches to the
  * next one without using libc. The argument order is (prev, next).

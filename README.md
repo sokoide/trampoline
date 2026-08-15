@@ -41,12 +41,12 @@ x86_64 向けの小さな cooperative threading サンプルです。`trampoline
 
 `sleep(1)` は blocking syscall なので、OS スレッド (プロセス全体) を
 ブロックします。A の sleep の間、B と C は一切動けません。協調スレッド
-では yield 以外の任意のタイミングで切替えが起きないため、これが
+では yield 以外のタイミングで切り替えが起きないため、これが
 cooperative threading の本質的な制限です (1 ループに 3 秒かかる理由)。
 
 ## API
 
-- `st_init()` — main のコンテキストを初期化
+- `st_init()` — main スレッドを実行中スレッド (current) に設定
 - `st_thread_create(fn, arg)` — TCB と専用スタックを作り ready queue へ
 - `st_start()` — ready queue の先頭スレッドへ最初の切り替えを行う
 - `st_yield()` — 現在のスレッドを queue の末尾へ戻し、次へ切り替え
@@ -116,7 +116,7 @@ thread->ctx.rsp = (uint64_t)sp;
 
 ```text
 高いアドレス
-┌────────────────────────────┐  stack + 64 KiB を16バイト境界に丸めた位置
+┌────────────────────────────┐  stack + 64 KiB を 16 バイト境界に丸めた位置
 │ 0                          │  ← ABI 用 padding（通常経路では使わない）
 ├────────────────────────────┤
 │ &trampoline                │  ← thread->ctx.rsp が指す位置
@@ -291,6 +291,11 @@ make run
 [C] step 1
 ...
 ```
+
+worker の表示は `snprintf` で組み立てた後、[`safe_helpers.h`](safe_helpers.h) の
+`safe_write_str()` が `write(2)` を直接呼びます。`printf` 系の stdio バッファリングは
+プロセス全体の状態を持つため、スレッドごとのスタックを手動で切り替えるこの教材では
+観察対象外の仕組みを増やさないよう、バッファなしの即時書き出しにしています。
 
 実行経路はホスト環境に応じて自動選択されます。
 

@@ -2,7 +2,7 @@
  *
  * This is the actual thread switch. It uses no special kernel feature.
  * It does four things:
- *   1. Save the current callee-saved registers into prev.
+ *   1. Save rsp and the current callee-saved registers into prev.
  *   2. Replace rsp with next->rsp. This changes the active stack.
  *   3. Restore the callee-saved registers from next.
  *   4. Use ret to jump to the address at next->rsp.
