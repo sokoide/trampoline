@@ -182,13 +182,13 @@ contains each function's saved `rbp`, local variables, and alignment space.
 ```text
  A's stack (return addresses during yield only)
  high address
- ┌────────────────────────────────────┐
- │ return to worker (call to st_yield)                  │
- ├────────────────────────────────────┤
- │ return to st_yield (call to switch_to_next)          │
- ├────────────────────────────────────┤
- │ return to switch_to_next (call to st_ctx_swap)       │ ← current rsp
- └────────────────────────────────────┘
+ ┌──────────────────────────────────────────
+ │ return to worker (call to st_yield)
+ ├──────────────────────────────────────────
+ │ return to st_yield (call to switch_to_next)
+ ├──────────────────────────────────────────
+ │ return to switch_to_next (call to st_ctx_swap)       ← current rsp
+ └──────────────────────────────────────────
  low address
 ```
 
@@ -336,7 +336,7 @@ Execution stops right after `ret` has popped `&trampoline`, and you can confirm:
 - `p/x $rsp` ends in `...8` — the ABI entry alignment for a function
   (`rsp % 16 == 8`)
 - `x/gx $rsp` shows `0x0` — the alignment word placed on the initial stack.
-  `&trampoline` sat just below it and was already consumed by `ret`
+  `&trampoline` was 8 bytes below current `rsp` (already consumed by `ret`)
 - `bt` does not show a normal caller chain. Depending on the GDB version, it may show
   only the trampoline or stop partway through the backtrace, because no function ever
   `call`ed the trampoline
