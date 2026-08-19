@@ -7,7 +7,7 @@ ORBSTACK := $(shell command -v orbctl 2>/dev/null)
 NATIVE_X64 := $(if $(and $(filter Linux,$(HOST_OS)),$(filter x86_64,$(HOST_ARCH))),1,)
 CROSS_QEMU := $(if $(and $(filter Linux,$(HOST_OS)),$(filter-out x86_64,$(HOST_ARCH)),$(shell command -v x86_64-linux-gnu-gcc 2>/dev/null),$(shell command -v qemu-x86_64-static 2>/dev/null)),1,)
 LINUX_MACHINE := x64-linux-env
-CFLAGS ?= -std=c11 -Wall -Wextra -O0 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls
+CFLAGS ?= -std=c11 -Wall -Wextra -O0 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls -fcf-protection=none
 
 .DEFAULT_GOAL := help
 .PHONY: all build run clean help linux-machines

@@ -10,7 +10,7 @@ static void* worker(void* arg) {
     char line[64];
     while (1) {
         snprintf(line, sizeof(line), "[%s] step %d\n", name, i++);
-        safe_write_str(line);
+        write_all(line);
         /* sleep(1) blocks the OS thread, so B and C also stop while A sleeps. */
         sleep(1);
         st_yield();

@@ -2,9 +2,9 @@
  *
  * This is the actual thread switch. It uses no special kernel feature.
  * It does four things:
- *   1. Save rsp and the current callee-saved registers into prev.
+ *   1. Save rsp, the current callee-saved registers, and FP control state into prev.
  *   2. Replace rsp with next->rsp. This changes the active stack.
- *   3. Restore the callee-saved registers from next.
+ *   3. Restore the callee-saved registers and FP control state from next.
  *   4. Use ret to jump to the address at next->rsp.
  *
  * Why is this enough?
@@ -14,10 +14,11 @@
  *   - rbp/rbx/r12-r15 are callee-saved by the ABI, so they must be saved.
  *     Registers such as rax, rcx, rdx, rsi, rdi, and r8-r11 are caller-saved;
  *     the caller cannot expect their values to survive this call.
- *   - SSE xmm0-xmm15 are also caller-saved under the System V AMD64 ABI.
+ *   - SSE (Streaming SIMD Extensions) xmm0-xmm15 registers are also caller-saved
+ *     under the System V AMD64 ABI.
  *     Since yield happens at a normal call boundary, the compiler handles any
- *     live values. MXCSR and the x87 control word are stricter ABI details;
- *     ordinary integer and double-precision code does not modify them.
+ *     live values. The MXCSR and x87 control word are preserved explicitly:
+ *     for example, one thread's rounding-mode change must not affect another.
  *
  * The argument order is (prev, next): save into prev and restore from next.
  *
@@ -40,6 +41,8 @@ st_ctx_swap:
     mov     [rdi + 32], r13
     mov     [rdi + 40], r14
     mov     [rdi + 48], r15
+    stmxcsr [rdi + 56]
+    fnstcw  WORD PTR [rdi + 60]
 
     /* --- Restore the next context from next (rsi). --- */
     mov     rsp, [rsi +  0]       /* rsp = next->rsp */
@@ -49,6 +52,8 @@ st_ctx_swap:
     mov     r13, [rsi + 32]
     mov     r14, [rsi + 40]
     mov     r15, [rsi + 48]
+    ldmxcsr [rsi + 56]
+    fldcw   WORD PTR [rsi + 60]
 
     ret                            /* Jump to the return address at next->rsp. */
     /* Record the byte length of st_ctx_swap for the object-file symbol table.

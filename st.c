@@ -52,7 +52,8 @@ static void switch_to_next(void) {
 
 /* Entry point for a new thread. st_ctx_swap reaches it with ret.
  * ret does not set arguments, so use the global current to find self and
- * call fn(arg). If fn returns, this sample has finished, so exit with _exit(0). */
+ * call fn(arg). This small API has no thread-exit operation: if fn returns,
+ * terminate the entire process with _exit(0). */
 static void trampoline(void) {
     current->fn(current->arg);
     _exit(0);
@@ -75,6 +76,11 @@ static void setup_stack(struct st_thread* thread) {
     *--sp = 0;
     *--sp = (uint64_t)(uintptr_t)&trampoline;
     thread->ctx.rsp = (uint64_t)(uintptr_t)sp;
+
+    /* A new logical thread starts with the creator's floating-point control
+     * state. st_ctx_swap subsequently keeps this state per thread. */
+    __asm__ volatile("stmxcsr %0" : "=m"(thread->ctx.mxcsr));
+    __asm__ volatile("fnstcw %0" : "=m"(thread->ctx.x87_cw));
 }
 
 void st_init(void) {

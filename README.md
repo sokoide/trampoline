@@ -6,6 +6,25 @@ x86_64 向けの小さな cooperative threading サンプルです。`trampoline
 新しいスレッドへ最初に制御を渡すとき、初期スタックに置いた戻り先へ
 `ret` する仕組みを観察するための教材です。
 
+## この教材の対象と制約
+
+対象は Linux x86_64 の System V AMD64 ABI*1 です。単一の OS (Operating System) スレッドで動く教育用の
+最小実装であり、割込み・シグナル処理・スタックのガードページ・スレッド終了後の資源解放は
+扱いません。
+
+CET*2 の Shadow Stack も扱いません。通常のスタックを切り替えて `ret` するため、
+Shadow Stack が有効なら通常スタックと整合せず失敗します。教材用の標準 `CFLAGS` は
+`-fcf-protection=none` でこれを無効化しています。`CFLAGS` を上書きしてビルドする場合も、
+この指定を維持してください。
+
+* *1 **ABI** (Application Binary Interface): コンパイル済みコード同士が連携するための
+  バイナリレベルの約束です。この教材では、引数を渡すレジスタ、保存すべきレジスタ、
+  スタックのアラインメントを定めます。
+* *2 **CET** (Control-flow Enforcement Technology): 制御フローの改ざんを検出する x86 の
+  CPU 機能です。Shadow Stack は通常のスタックとは別に return address を保持します。
+* *3 **MXCSR**: x86 の Streaming SIMD Extensions (SSE) における浮動小数点の制御・状態
+  レジスタです。ここでは丸めモードを含む制御状態を、スレッドごとに保持します。
+
 ## 前提知識
 
 次の 3 点を前提とします。いずれも本文で必要になったときに改めて説明しますが、
@@ -14,7 +33,7 @@ x86_64 向けの小さな cooperative threading サンプルです。`trampoline
 - x86_64 の `call` は「呼び出し元へ戻るアドレス」をスタックへ push し、`ret` は
   それを pop してジャンプする
 - スタックはアドレスが高い方向から低い方向へ成長する
-- System V AMD64 ABI はレジスタを callee-saved (`rbp`、`rbx`、`r12`〜`r15`) と
+- System V AMD64 ABI*1 はレジスタを callee-saved (`rbp`、`rbx`、`r12`〜`r15`) と
   caller-saved (`rax`、`rcx`、`rdx`、`rsi`、`rdi`、`r8`〜`r11` など) に分ける
 
 ## 目次
@@ -24,7 +43,7 @@ x86_64 向けの小さな cooperative threading サンプルです。`trampoline
 3. [API](#api)
 4. [コンテキストスイッチ](#コンテキストスイッチ)
 5. [ビルドと実行](#ビルドと実行)
-6. [gdb で観察する](#gdb-で観察する)
+6. [gdb (GNU Debugger) で観察する](#gdb-gnu-debugger-で観察する)
 
 ## 動作
 
@@ -51,6 +70,9 @@ cooperative threading の本質的な制限です (1 ループに 3 秒かかる
 - `st_start()` — ready queue の先頭スレッドへ最初の切り替えを行う
 - `st_yield()` — 現在のスレッドを queue の末尾へ戻し、次へ切り替え
 
+この最小 API に `st_thread_exit()` はありません。`fn` が return すると trampoline が
+`_exit(0)` を呼ぶため、**そのスレッドだけではなくプロセス全体が終了**します。
+
 ### TCB (Thread Control Block)
 
 各スレッドは TCB と呼ぶ `struct st_thread` ([`internal.h`](internal.h)) で表します。
@@ -58,7 +80,7 @@ OS スレッドは 1 つも作りません。スレッドの実体はこの構�
 
 ```c
 struct st_thread {
-    struct st_ctx ctx;          /* st_ctx_swap の保存先・復元先 (rsp/rbp/rbx/r12-r15) */
+    struct st_ctx ctx;          /* rsp/rbp/rbx/r12-r15 と FP 制御状態の保存先・復元先 */
     void* stack;                /* 専用スタック (64 KiB) */
     st_fn fn;                   /* スレッドの開始関数 */
     void* arg;                  /* fn へ渡す引数 */
@@ -71,11 +93,11 @@ struct st_thread {
 ## コンテキストスイッチ
 
 [`ctx.S`](ctx.S) の `st_ctx_swap` が切り替えの本体です。x86_64 の callee-saved
-レジスタと `rsp` を保存・復元し、最後に `ret` します。
+レジスタ、`rsp`、浮動小数点 (FP) 制御状態を保存・復元し、最後に `ret` します。
 
 ```text
-prev->ctx に rsp/rbp/rbx/r12-r15 を保存
-next->ctx から同じレジスタを復元
+prev->ctx に rsp/rbp/rbx/r12-r15 と FP 制御状態を保存
+next->ctx から同じ状態を復元
 rsp を next のスタックへ差し替え
 ret で next の戻り先へ移動
 ```
@@ -238,8 +260,10 @@ caller-saved レジスタは、通常の関数呼び出しと同様に値を期�
 
 ただしこれは「どんな最適化でも無条件に安全」という意味ではありません。切替え関数を
 通常の関数呼び出しとして呼び、再開先が有効であり、対象 ABI が要求する保存状態を
-すべて復元することが前提です。このサンプルでは x86_64 System V ABI を対象に、
-その最小条件を満たしています。
+復元することが前提です。このサンプルは x86_64 System V ABI の整数レジスタ、x87
+control word、MXCSR*3 を扱います。ただし x87 レジスタスタック、AVX (Advanced Vector
+Extensions) 拡張状態、
+シグナルコンテキスト、CET Shadow Stack は扱いません。
 
 本教材のビルド (`Makefile` の `CFLAGS`) は `-O0` に
 `-fno-omit-frame-pointer` と `-fno-optimize-sibling-calls` を組み合わせ、
@@ -249,16 +273,18 @@ saved `rbp`、ローカル変数、パディングを含む完全な物理レイ
 
 ### 4. 保存するレジスタ
 
-`st_ctx_swap` が保存するのは `rsp`、`rbp`、`rbx`、`r12`〜`r15` だけです。
+`st_ctx_swap` は `rsp`、`rbp`、`rbx`、`r12`〜`r15` に加え、x87 control word と
+MXCSR*3 を保存します。
 `rbp`、`rbx`、`r12`〜`r15` は System V AMD64 ABI の callee-saved です。`rsp` は
 分類上 callee-saved ではありませんが、関数呼び出しをまたいで論理的に復元される
 ため、一緒に保存します。`st_ctx_swap` は通常の関数呼び出し境界で呼ばれるため、
-caller-saved レジスタは C コンパイラ側の責任であり、この小さな切り替え処理では
-保存しません。
+caller-saved レジスタと XMM (SIMD データ) レジスタは C コンパイラ側の責任であり、この小さな
+切り替え処理では保存しません。一方、浮動小数点の丸めモードなどをスレッド間で混ぜない
+ため、各スレッドの x87 control word と MXCSR は保存・復元します。
 
 ```text
-prev->ctx に保存: rsp, rbp, rbx, r12, r13, r14, r15
-next->ctx から復元: 同じ7個
+prev->ctx に保存: rsp, rbp, rbx, r12, r13, r14, r15, mxcsr, x87 control word
+next->ctx から復元: 同じ状態
 最後に: rsp を差し替えた状態で ret
 ```
 
@@ -293,7 +319,8 @@ make run
 ```
 
 worker の表示は `snprintf` で組み立てた後、[`safe_helpers.h`](safe_helpers.h) の
-`safe_write_str()` が `write(2)` を直接呼びます。`printf` 系の stdio バッファリングは
+`write_all()` が `write(2)` を直接呼びます。部分書込みと `EINTR` は再試行します。
+`printf` 系の stdio バッファリングは
 プロセス全体の状態を持つため、スレッドごとのスタックを手動で切り替えるこの教材では
 観察対象外の仕組みを増やさないよう、バッファなしの即時書き出しにしています。
 
@@ -313,7 +340,7 @@ make run
 `ctx.S` は GNU assembler の Intel 構文を使用します。macOS ホスト上で直接
 アセンブルするのではなく、x86_64 Linux 経路でビルドしてください。
 
-## gdb で観察する
+## gdb (GNU Debugger) で観察する
 
 `-O0` + `-fno-omit-frame-pointer` + `-fno-optimize-sibling-calls` は、この観察の
 ための設定です。このサンプルは x86_64 Linux バイナリなので、gdb も x86_64 Linux

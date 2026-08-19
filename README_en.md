@@ -6,6 +6,27 @@ A small cooperative-threading sample for x86_64. `trampoline` is a teaching exam
 for observing how control first enters a new thread by executing `ret` to an address
 placed on its initial stack.
 
+## Scope and limitations
+
+The target is Linux x86_64 using the System V AMD64 ABI*1. This is a minimal,
+single-OS (Operating System)-thread teaching implementation; it does not cover interrupts, signal
+handling, stack guard pages, or reclaiming a terminated thread's resources.
+
+It also does not support CET*2 Shadow Stack. This sample switches the ordinary stack
+and then executes `ret`, which does not match a Shadow Stack. The default teaching
+`CFLAGS` disables it with `-fcf-protection=none`. Keep that option when overriding
+`CFLAGS`.
+
+* *1 **ABI** (Application Binary Interface): binary-level rules that let compiled
+  code interoperate. Here they define argument registers, preserved registers, and
+  stack alignment.
+* *2 **CET** (Control-flow Enforcement Technology): an x86 CPU feature that detects
+  control-flow tampering. Shadow Stack keeps return addresses separately from the
+  ordinary stack.
+* *3 **MXCSR**: the floating-point control/status register of x86 Streaming SIMD
+  Extensions (SSE). This sample keeps its control state, including rounding mode,
+  per thread.
+
 ## Prerequisites
 
 The text assumes the following three points. Each is explained again where needed,
@@ -14,7 +35,7 @@ but look them up first if the terms are unfamiliar.
 - An x86_64 `call` pushes a return address onto the stack, and `ret` pops it and
   jumps to it
 - The stack grows from higher addresses toward lower addresses
-- The System V AMD64 ABI splits registers into callee-saved (`rbp`, `rbx`,
+- The System V AMD64 ABI*1 splits registers into callee-saved (`rbp`, `rbx`,
   `r12`-`r15`) and caller-saved (`rax`, `rcx`, `rdx`, `rsi`, `rdi`, `r8`-`r11`, etc.)
 
 ## Table of contents
@@ -24,7 +45,7 @@ but look them up first if the terms are unfamiliar.
 3. [API](#api)
 4. [Context switch](#context-switch)
 5. [Build and run](#build-and-run)
-6. [Observing with gdb](#observing-with-gdb)
+6. [Observing with gdb (GNU Debugger)](#observing-with-gdb-gnu-debugger)
 
 ## Behavior
 
@@ -51,6 +72,9 @@ and explains why one complete rotation takes three seconds.
 - `st_start()` — perform the first switch to the head of the ready queue
 - `st_yield()` — append the current thread to the end of the queue and switch to the next thread
 
+This minimal API has no `st_thread_exit()`. If `fn` returns, the trampoline calls
+`_exit(0)`, terminating the **entire process**, not merely that thread.
+
 ### TCB (Thread Control Block)
 
 Each thread is represented by a `struct st_thread` ([`internal.h`](internal.h)),
@@ -59,7 +83,7 @@ its private stack.
 
 ```c
 struct st_thread {
-    struct st_ctx ctx;          /* save/restore area of st_ctx_swap (rsp/rbp/rbx/r12-r15) */
+    struct st_ctx ctx;          /* save/restore area for registers, rsp, and FP control state */
     void* stack;                /* private stack (64 KiB) */
     st_fn fn;                   /* thread entry function */
     void* arg;                  /* argument passed to fn */
@@ -72,11 +96,12 @@ In the rest of this README, "A's context" means the `ctx` field of A's TCB.
 ## Context switch
 
 [`ctx.S`](ctx.S) contains the actual `st_ctx_swap` implementation. It saves and
-restores the x86_64 callee-saved registers and `rsp`, then executes `ret`.
+restores the x86_64 callee-saved registers, `rsp`, and floating-point (FP) control
+state, then executes `ret`.
 
 ```text
-save rsp/rbp/rbx/r12-r15 into prev->ctx
-restore the same registers from next->ctx
+save rsp/rbp/rbx/r12-r15 and FP control state into prev->ctx
+restore the same state from next->ctx
 replace rsp with next's stack pointer
 ret to next's continuation address
 ```
@@ -239,8 +264,9 @@ context switch remains correct as long as `st_ctx_swap` preserves this ABI contr
 
 This does not mean that every optimization is unconditionally safe. The switch
 function must be called as a normal function boundary, the continuation must be valid,
-and every register state required by the target ABI must be restored. This sample
-targets the x86_64 System V ABI and satisfies those minimum requirements.
+and the ABI-required state must be restored. This sample handles the x86_64 System V
+integer registers, x87 control word, and MXCSR*3. It does not handle the x87 register
+stack, AVX (Advanced Vector Extensions) extended state, signal context, or CET Shadow Stack.
 
 The educational build in the `Makefile` uses `-O0`, keeps the frame pointer, and
 disables sibling-call optimization so that the **return-address chain** shown in the
@@ -250,16 +276,19 @@ These flags are also the basis for following the stack in gdb.
 
 ### 4. Saved registers
 
-`st_ctx_swap` saves only `rsp`, `rbp`, `rbx`, and `r12` through `r15`.
+`st_ctx_swap` saves `rsp`, `rbp`, `rbx`, and `r12` through `r15`, plus the x87 control
+word and MXCSR*3.
 Under the System V AMD64 ABI, `rbp`, `rbx`, and `r12`-`r15` are the callee-saved
 registers; `rsp` is not classified as callee-saved, but it is logically restored
 across a function call, so it is saved as well. Because `st_ctx_swap` is reached
 through an ordinary function-call boundary, caller-saved registers are the caller's
-responsibility, and this small switch routine does not save them.
+responsibility, and this small switch routine does not save them. Conversely, it saves
+and restores each thread's x87 control word and MXCSR so, for example, a rounding-mode
+change in one thread does not leak into another.
 
 ```text
-save into prev->ctx:  rsp, rbp, rbx, r12, r13, r14, r15
-restore from next->ctx: the same seven registers
+save into prev->ctx:  rsp, rbp, rbx, r12, r13, r14, r15, mxcsr, x87 control word
+restore from next->ctx: the same state
 finally: ret with rsp pointing at the next stack
 ```
 
@@ -294,8 +323,8 @@ three seconds).
 ```
 
 Each worker formats its line with `snprintf` and writes it through
-`safe_write_str()` ([`safe_helpers.h`](safe_helpers.h)), which calls `write(2)`
-directly. stdio buffering carries process-wide state, so to avoid mechanisms
+`write_all()` ([`safe_helpers.h`](safe_helpers.h)), which calls `write(2)` directly
+and retries partial writes and `EINTR`. stdio buffering carries process-wide state, so to avoid mechanisms
 unrelated to manual stack switching, this sample writes output immediately
 without buffering.
 
@@ -315,7 +344,7 @@ make run
 `ctx.S` uses GNU assembler Intel syntax. On macOS, build through the x86_64 Linux route
 instead of assembling it directly on the host.
 
-## Observing with gdb
+## Observing with gdb (GNU Debugger)
 
 The `-O0` + `-fno-omit-frame-pointer` + `-fno-optimize-sibling-calls` flags exist for
 this observation. This sample is an x86_64 Linux binary, so run gdb inside an x86_64
