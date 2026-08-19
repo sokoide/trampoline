@@ -42,7 +42,7 @@ struct st_ctx {
     uint64_t r15; /* +48 */
     uint32_t mxcsr; /* +56: SSE control/status register */
     uint16_t x87_cw; /* +60: x87 floating-point control word */
-    uint16_t padding; /* +62: make the structure 8-byte aligned */
+    uint16_t padding; /* +62: explicit trailing padding; keeps sizeof at 64 bytes */
 };
 
 /* Check the layout against ctx.S at compile time.

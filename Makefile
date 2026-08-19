@@ -8,6 +8,7 @@ NATIVE_X64 := $(if $(and $(filter Linux,$(HOST_OS)),$(filter x86_64,$(HOST_ARCH)
 CROSS_QEMU := $(if $(and $(filter Linux,$(HOST_OS)),$(filter-out x86_64,$(HOST_ARCH)),$(shell command -v x86_64-linux-gnu-gcc 2>/dev/null),$(shell command -v qemu-x86_64-static 2>/dev/null)),1,)
 LINUX_MACHINE := x64-linux-env
 CFLAGS ?= -std=c11 -Wall -Wextra -O0 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls -fcf-protection=none
+LDLIBS ?=
 
 .DEFAULT_GOAL := help
 .PHONY: all build run clean help linux-machines
@@ -28,14 +29,14 @@ endif
 
 ifeq ($(NATIVE_X64),1)
 trampoline_sample: st.c ctx.S main.c st.h ctx.h internal.h safe_helpers.h
-	$(CC) $(CFLAGS) st.c ctx.S main.c -o $@
+	$(CC) $(CFLAGS) st.c ctx.S main.c -o $@ $(LDLIBS)
 build: trampoline_sample
 run: trampoline_sample
 	@echo "[route: $(ROUTE)]"
 	./trampoline_sample
 else ifeq ($(CROSS_QEMU),1)
 trampoline_sample: st.c ctx.S main.c st.h ctx.h internal.h safe_helpers.h
-	$(CC) $(CFLAGS) st.c ctx.S main.c -o $@
+	$(CC) $(CFLAGS) st.c ctx.S main.c -o $@ $(LDLIBS)
 build: trampoline_sample
 run: trampoline_sample
 	@echo "[route: $(ROUTE)]"
@@ -43,7 +44,7 @@ run: trampoline_sample
 else
 build run:
 	@echo "[route: $(ROUTE)]"
-	@scripts/in-linux.sh $(LINUX_MACHINE) "make NATIVE_X64=1 $@"
+	@scripts/in-linux.sh $(LINUX_MACHINE) "make NATIVE_X64=1 CFLAGS='$(CFLAGS)' LDLIBS='$(LDLIBS)' $@"
 endif
 
 all: build

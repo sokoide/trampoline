@@ -9,7 +9,7 @@ placed on its initial stack.
 ## Scope and limitations
 
 The target is Linux x86_64 using the System V AMD64 ABI*1. This is a minimal,
-single-OS (Operating System)-thread teaching implementation; it does not cover interrupts, signal
+single OS thread (one operating-system thread) teaching implementation; it does not cover interrupts, signal
 handling, stack guard pages, or reclaiming a terminated thread's resources.
 
 It also does not support CET*2 Shadow Stack. This sample switches the ordinary stack
@@ -23,10 +23,6 @@ and then executes `ret`, which does not match a Shadow Stack. The default teachi
 * *2 **CET** (Control-flow Enforcement Technology): an x86 CPU feature that detects
   control-flow tampering. Shadow Stack keeps return addresses separately from the
   ordinary stack.
-* *3 **MXCSR**: the floating-point control/status register of x86 Streaming SIMD
-  Extensions (SSE). This sample keeps its control state, including rounding mode,
-  per thread.
-
 ## Prerequisites
 
 The text assumes the following three points. Each is explained again where needed,
@@ -268,6 +264,10 @@ and the ABI-required state must be restored. This sample handles the x86_64 Syst
 integer registers, x87 control word, and MXCSR*3. It does not handle the x87 register
 stack, AVX (Advanced Vector Extensions) extended state, signal context, or CET Shadow Stack.
 
+* *3 **MXCSR**: the floating-point control/status register of x86 Streaming SIMD
+  Extensions (SSE). This sample keeps its control state, including rounding mode,
+  per thread.
+
 The educational build in the `Makefile` uses `-O0`, keeps the frame pointer, and
 disables sibling-call optimization so that the **return-address chain** shown in the
 diagram is easier to observe in the binary. The complete physical layout still
@@ -295,6 +295,38 @@ finally: ret with rsp pointing at the next stack
 The sample does not use the kernel scheduler, timer interrupts, `setcontext()`, or
 `makecontext()`. It manually switches user-space stacks and registers on a single OS
 thread.
+
+### Optional exercise: verify that rounding modes do not leak
+
+Saving MXCSR and the x87 control word keeps each logical thread's floating-point
+rounding mode independent. To observe this, replace the A and B workers in `main.c`
+with the following worker, which yields once. Also include `<fenv.h>` and `<stdint.h>`.
+Link the exercise version with `make LDLIBS=-lm build`, because it uses `fesetround()`
+and `fegetround()`.
+
+```c
+static void* rounding_worker(void* arg) {
+    int mode = (int)(intptr_t)arg;
+    char line[64];
+
+    fesetround(mode);
+    st_yield();
+    snprintf(line, sizeof(line), "%s\n",
+             fegetround() == mode ? "rounding mode preserved" : "rounding mode leaked");
+    write_all(line);
+    return NULL;
+}
+
+/* Create only A and B. Once A resumes and prints, its return exits the process. */
+st_thread_create(rounding_worker, (void*)(intptr_t)FE_DOWNWARD);
+st_thread_create(rounding_worker, (void*)(intptr_t)FE_UPWARD);
+```
+
+With the current `ctx.S`, A prints `rounding mode preserved`. In a teaching-only
+variant that removes `stmxcsr` / `ldmxcsr` and `fnstcw` / `fldcw`, B's last setting
+remains active when A resumes, and A prints `rounding mode leaked`. Checking the
+control state directly avoids relying on rounding-sensitive arithmetic that an
+optimizer might transform.
 
 ## Build and run
 
@@ -324,7 +356,8 @@ three seconds).
 
 Each worker formats its line with `snprintf` and writes it through
 `write_all()` ([`safe_helpers.h`](safe_helpers.h)), which calls `write(2)` directly
-and retries partial writes and `EINTR`. stdio buffering carries process-wide state, so to avoid mechanisms
+and retries partial writes and `EINTR`. Any other error, or a zero-byte write (no
+progress), stops output for this demo. stdio buffering carries process-wide state, so to avoid mechanisms
 unrelated to manual stack switching, this sample writes output immediately
 without buffering.
 

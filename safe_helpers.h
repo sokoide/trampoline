@@ -6,7 +6,8 @@
 #include <unistd.h>
 
 /* Write a NUL-terminated string without stdio buffering. Retry interrupted and
- * partial writes; a permanent error is intentionally ignored by this demo. */
+ * partial writes; stop on another error or zero progress. This demo ignores the
+ * resulting output failure. */
 static inline void write_all(const char* s) {
     size_t n = 0;
     while (s[n] != '\0')

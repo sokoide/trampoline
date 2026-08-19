@@ -22,9 +22,6 @@ Shadow Stack が有効なら通常スタックと整合せず失敗します。�
   スタックのアラインメントを定めます。
 * *2 **CET** (Control-flow Enforcement Technology): 制御フローの改ざんを検出する x86 の
   CPU 機能です。Shadow Stack は通常のスタックとは別に return address を保持します。
-* *3 **MXCSR**: x86 の Streaming SIMD Extensions (SSE) における浮動小数点の制御・状態
-  レジスタです。ここでは丸めモードを含む制御状態を、スレッドごとに保持します。
-
 ## 前提知識
 
 次の 3 点を前提とします。いずれも本文で必要になったときに改めて説明しますが、
@@ -265,6 +262,9 @@ control word、MXCSR*3 を扱います。ただし x87 レジスタスタック�
 Extensions) 拡張状態、
 シグナルコンテキスト、CET Shadow Stack は扱いません。
 
+* *3 **MXCSR**: x86 の Streaming SIMD Extensions (SSE) における浮動小数点の制御・状態
+  レジスタです。この教材では、丸めモードを含む制御状態をスレッドごとに保持します。
+
 本教材のビルド (`Makefile` の `CFLAGS`) は `-O0` に
 `-fno-omit-frame-pointer` と `-fno-optimize-sibling-calls` を組み合わせ、
 図に示した**戻りアドレスの連鎖**を実バイナリでも観察しやすくしています。
@@ -291,6 +291,36 @@ next->ctx から復元: 同じ状態
 カーネルのスケジューラ、タイマ割り込み、`setcontext()`、`makecontext()` は
 使っていません。単一の OS スレッド上で、ユーザー空間のスタックとレジスタを
 手動で差し替えています。
+
+### 任意演習: 丸めモードが混ざらないことを確認する
+
+MXCSR と x87 control word を保存する理由は、各論理スレッドの浮動小数点丸めモードを
+独立に保つためです。`main.c` で A と B の worker を次のような一回だけ yield する関数に
+置き換えて確認できます。`<fenv.h>` と `<stdint.h>` も追加してください。
+`fesetround()` と `fegetround()` を使うため、演習版は `make LDLIBS=-lm build` でリンクします。
+
+```c
+static void* rounding_worker(void* arg) {
+    int mode = (int)(intptr_t)arg;
+    char line[64];
+
+    fesetround(mode);
+    st_yield();
+    snprintf(line, sizeof(line), "%s\n",
+             fegetround() == mode ? "rounding mode preserved" : "rounding mode leaked");
+    write_all(line);
+    return NULL;
+}
+
+/* A と B だけを作る。A が再開して表示した後、return によりプロセス全体が終了する。 */
+st_thread_create(rounding_worker, (void*)(intptr_t)FE_DOWNWARD);
+st_thread_create(rounding_worker, (void*)(intptr_t)FE_UPWARD);
+```
+
+現在の `ctx.S` では A は `rounding mode preserved` を出力します。学習用の派生版で
+`stmxcsr` / `ldmxcsr` と `fnstcw` / `fldcw` を外すと、B が最後に設定したモードが A に
+残り、`rounding mode leaked` になります。この演習は制御状態そのものを検査するため、
+丸め依存の算術結果を最適化で変形される心配がありません。
 
 ## ビルドと実行
 
@@ -320,6 +350,7 @@ make run
 
 worker の表示は `snprintf` で組み立てた後、[`safe_helpers.h`](safe_helpers.h) の
 `write_all()` が `write(2)` を直接呼びます。部分書込みと `EINTR` は再試行します。
+それ以外のエラーと 0 バイト書込み（進捗なし）は、このデモでは出力失敗として打ち切ります。
 `printf` 系の stdio バッファリングは
 プロセス全体の状態を持つため、スレッドごとのスタックを手動で切り替えるこの教材では
 観察対象外の仕組みを増やさないよう、バッファなしの即時書き出しにしています。
