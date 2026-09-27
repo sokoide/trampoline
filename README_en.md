@@ -34,14 +34,25 @@ but look them up first if the terms are unfamiliar.
 - The System V AMD64 ABI*1 splits registers into callee-saved (`rbp`, `rbx`,
   `r12`-`r15`) and caller-saved (`rax`, `rcx`, `rdx`, `rsi`, `rdi`, `r8`-`r11`, etc.)
 
+## Guided interactive exercise
+
+Open [the browser exercise](learning_lab.html) (Japanese interface) to predict the next logical thread and
+`ret` target at each switch, then check your reasoning against the symbolic queue and
+saved `rsp`. It runs locally without Linux; it models the code but does not execute it.
+Predict the first entry and A's later resume before starting. Afterward, explain the
+queue change, the selected `ctx.rsp`, and the destination, then verify them with the
+gdb walkthrough below. Correct answers in the exercise do not establish a measured
+learning gain.
+
 ## Table of contents
 
 1. [Prerequisites](#prerequisites)
-2. [Behavior](#behavior)
-3. [API](#api)
-4. [Context switch](#context-switch)
-5. [Build and run](#build-and-run)
-6. [Observing with gdb (GNU Debugger)](#observing-with-gdb-gnu-debugger)
+2. [Guided interactive exercise](#guided-interactive-exercise)
+3. [Behavior](#behavior)
+4. [API](#api)
+5. [Context switch](#context-switch)
+6. [Build and run](#build-and-run)
+7. [Observing with gdb (GNU Debugger)](#observing-with-gdb-gnu-debugger)
 
 ## Behavior
 

@@ -33,14 +33,35 @@ Shadow Stack が有効なら通常スタックと整合せず失敗します。�
 - System V AMD64 ABI*1 はレジスタを callee-saved (`rbp`、`rbx`、`r12`〜`r15`) と
   caller-saved (`rax`、`rcx`、`rdx`、`rsi`、`rdi`、`r8`〜`r11` など) に分ける
 
+## 段階式の演習
+
+[ブラウザ演習「どこへ `ret` する？」](learning_lab.html) は、`st_start()` から
+A・B・C の yield と A の再開までを、**予測 → 操作 → 理由の確認**の順に進めます。
+ブラウザでファイルを開くだけで使え、Linux 環境は不要です。画面は実装を記号化した
+モデルであり、実際のアドレスやレジスタ値は gdb で確認します。
+
+到達目標は、ready queue と `ctx.rsp` から、次の論理スレッドと
+`st_ctx_swap` の `ret` の行き先を説明できることです。最初に本文を見ずに
+「最初の `ret` はどこへ飛ぶか」「A が一巡後に再開するときはどこへ戻るか」を
+予測して書き、演習後に同じ問いへ理由付きで答えてください。
+
+1. 演習の4段階を進める。誤答時はまず queue と `ctx.rsp` を見直し、必要ならヒントを開く。
+2. 最後の転用問題で、worker が return した場合の B・C の状態を予測する。
+3. [gdb で観察する](#gdb-gnu-debugger-で観察する)で、初回の `rsp` と A の再開先を実物と照合する。
+
+説明の正しさを確認する際は、**queue の変化、選ばれた `ctx.rsp`、`ret` 後の到着先**を
+別々に述べられるかを見ます。演習の正答や使いやすさだけで学習効果が実証されたとは
+扱いません。初回予測と演習後の説明を比較することで、この教材での理解を確認します。
+
 ## 目次
 
 1. [前提知識](#前提知識)
-2. [動作](#動作)
-3. [API](#api)
-4. [コンテキストスイッチ](#コンテキストスイッチ)
-5. [ビルドと実行](#ビルドと実行)
-6. [gdb (GNU Debugger) で観察する](#gdb-gnu-debugger-で観察する)
+2. [段階式の演習](#段階式の演習)
+3. [動作](#動作)
+4. [API](#api)
+5. [コンテキストスイッチ](#コンテキストスイッチ)
+6. [ビルドと実行](#ビルドと実行)
+7. [gdb (GNU Debugger) で観察する](#gdb-gnu-debugger-で観察する)
 
 ## 動作
 
@@ -426,5 +447,21 @@ scripts/in-linux.sh x64-linux-env "gdb -q ./trampoline_sample"
   見えます。「3. yield 中の戻りアドレス」の図に対応します
 - `x/gx $rsp` が「`st_ctx_swap` の呼び出し元へ戻るアドレス」です。
   `info symbol` で `switch_to_next` 内のアドレスであることを確認できます
+
+### 一巡後の A の再開先
+
+`break st_ctx_swap` を残したまま `continue` を繰り返すと、4回目の停止は
+C から A への切替えです（1回目は main→A、2回目は A→B、3回目は B→C）。
+この時点で第2引数 `rsi` が A の `ctx` を指すため、次を確認します。
+
+```text
+(gdb) p/x ((struct st_ctx*)$rsi)->rsp
+(gdb) x/gx ((struct st_ctx*)$rsi)->rsp
+(gdb) info symbol *(void**)((struct st_ctx*)$rsi)->rsp
+```
+
+A の保存済み `rsp` が指す値は、最初の `&trampoline` ではなく、A が
+`st_ctx_swap()` を呼び出した後の継続先です。アドレスの数値はビルドごとに
+異なるため、`info symbol` で属する関数を確認してください。
 
 観察後は `Ctrl-C` でプログラムを止め、`quit` で gdb を終了します。

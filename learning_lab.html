@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>trampoline: ret の行き先を予測する</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, sans-serif; color: #183044; background: #f4f7f8; }
+    * { box-sizing: border-box; }
+    body { max-width: 940px; margin: 0 auto; padding: 2rem 1rem 4rem; line-height: 1.65; }
+    h1, h2 { line-height: 1.25; }
+    h1 { margin-bottom: .3rem; }
+    .lead { color: #43596a; margin-top: 0; }
+    .panel { background: white; border: 1px solid #ccd9df; border-radius: 12px; padding: 1.3rem; margin: 1rem 0; box-shadow: 0 2px 8px #193b5010; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; }
+    .state { background: #eaf2f6; border-radius: 8px; padding: .8rem 1rem; }
+    .state strong { display: block; font-size: .9rem; color: #38566b; }
+    .state span { font-size: 1.25rem; font-weight: 700; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    pre { overflow-x: auto; background: #152b3a; color: #ecf5f8; padding: 1rem; border-radius: 8px; line-height: 1.5; }
+    label { display: block; font-weight: 650; margin: .8rem 0 .25rem; }
+    select, button, textarea { font: inherit; padding: .55rem .7rem; border-radius: 7px; }
+    select, textarea { width: min(100%, 520px); border: 1px solid #829baa; background: white; }
+    textarea { display: block; min-height: 5rem; resize: vertical; }
+    button { border: 1px solid #0e617e; background: #0e617e; color: white; cursor: pointer; margin: .7rem .5rem .2rem 0; }
+    button.secondary { color: #0e617e; background: white; }
+    button:disabled { opacity: .5; cursor: default; }
+    button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #eea62f; outline-offset: 2px; }
+    .feedback { min-height: 2.2rem; font-weight: 600; }
+    .feedback.error { color: #a03329; }
+    .feedback.success { color: #17664c; }
+    .hint { border-left: 4px solid #daa332; padding: .4rem .8rem; background: #fff7df; }
+    .result { border-left: 4px solid #3a9a79; padding: .4rem .8rem; background: #e7f6ee; }
+    .progress { font-weight: 650; color: #255875; }
+    a { color: #075b7a; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>どこへ <code>ret</code> する？</h1>
+    <p class="lead">ready queue と保存された <code>rsp</code> を操作して、初回開始と再開の違いを確かめる演習です。ブラウザだけで動きます。</p>
+    <section class="panel" aria-labelledby="goal-heading">
+      <h2 id="goal-heading">到達目標</h2>
+      <p>各切替えで次に実行する論理スレッドと <code>st_ctx_swap</code> の <code>ret</code> の行き先を予測し、その根拠を「queue の操作」と「<code>ctx.rsp</code> が指す値」で説明できる。</p>
+      <p>これは <a href="st.c">st.c</a> と <a href="ctx.S">ctx.S</a> の動作を記号化したモデルです。実際のレジスタ値やアドレスを表示する実行器ではありません。実機の確認には README の gdb 演習を使ってください。</p>
+    </section>
+
+    <section class="panel" aria-labelledby="lab-heading">
+      <h2 id="lab-heading">切替えを予測する</h2>
+      <p id="progress" class="progress"></p>
+      <p id="action"></p>
+      <div class="grid" aria-live="polite">
+        <div class="state"><strong>現在実行中</strong><span id="current"></span></div>
+        <div class="state"><strong>ready queue（先頭 → 末尾）</strong><span id="queue"></span></div>
+      </div>
+      <pre id="contexts"></pre>
+      <p id="task"></p>
+      <label for="next-thread">切替え後に実行するのは？</label>
+      <select id="next-thread">
+        <option value="">選択してください</option>
+        <option value="A">A</option><option value="B">B</option><option value="C">C</option>
+        <option value="main">main</option>
+      </select>
+      <label for="ret-target"><code>st_ctx_swap</code> の <code>ret</code> はどこへ？</label>
+      <select id="ret-target">
+        <option value="">選択してください</option>
+        <option value="trampoline">新スレッドの trampoline</option>
+        <option value="continuation">前回の st_ctx_swap 呼出し直後</option>
+        <option value="worker">worker の先頭</option>
+        <option value="main">main の次の命令</option>
+      </select>
+      <label for="reason">予測した理由（queue の変化と、選ばれる ctx.rsp の値）</label>
+      <textarea id="reason" placeholder="例：現在のスレッドを末尾に入れた後、先頭は…"></textarea>
+      <div>
+        <button id="check" type="button">予測を確認</button>
+        <button id="hint" type="button" class="secondary">ヒントを見る</button>
+        <button id="advance" type="button" hidden>切替えを実行して次へ</button>
+      </div>
+      <p id="hint-text" class="hint" hidden></p>
+      <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
+      <p id="result" class="result" hidden></p>
+    </section>
+
+    <section id="transfer" class="panel" hidden aria-labelledby="transfer-heading">
+      <h2 id="transfer-heading">別の状況へ転用する</h2>
+      <p>予測した経路を使い、次の問いに答えてください。正解を見る前に理由も声に出すかメモしてください。</p>
+      <label for="transfer-answer">A の <code>worker</code> が <code>return</code> したら、B と C はどうなる？</label>
+      <select id="transfer-answer">
+        <option value="">選択してください</option>
+        <option value="continue">B と C が続く</option>
+        <option value="exit">プロセス全体が終了する</option>
+        <option value="main">main に戻る</option>
+      </select>
+      <button id="transfer-check" type="button">理由を確認</button>
+      <p id="transfer-feedback" role="status" aria-live="polite"></p>
+      <p>実物で確かめるには <a href="README.md#最初の-trampoline-到着">gdb の観察手順</a>へ進み、<code>ret</code> 直後の <code>rsp</code> とスタックの値を予測してから見る。</p>
+      <button id="restart" type="button" class="secondary">最初からやり直す</button>
+    </section>
+  </main>
+  <script>
+    'use strict';
+
+    // Symbolic model of st.c: ready_push, ready_pop, and st_ctx_swap.
+    const state = { current: 'main', queue: ['A', 'B', 'C'], saved: { A: 'trampoline', B: 'trampoline', C: 'trampoline', main: 'none' }, step: 0 };
+    const totalSteps = 4;
+    const $ = (id) => document.getElementById(id);
+    let solved = false;
+    let hintLevel = 0;
+
+    function prediction() {
+      const afterPush = state.current === 'main' ? [...state.queue] : [...state.queue, state.current];
+      const next = afterPush[0];
+      return { afterPush, next, target: state.saved[next] };
+    }
+
+    function render() {
+      const isDone = state.step === totalSteps;
+      $('transfer').hidden = !isDone;
+      $('lab-heading').textContent = isDone ? '4回の切替えを確認しました' : '切替えを予測する';
+      $('progress').textContent = isDone ? '完了' : `段階 ${state.step + 1} / ${totalSteps}`;
+      $('action').textContent = isDone ? 'A が再開しました。' : state.current === 'main' ? 'main が st_start() を呼びます。' : `${state.current} が st_yield() を呼びます。`;
+      $('current').textContent = state.current;
+      $('queue').textContent = state.queue.join(' → ') || '空';
+      $('contexts').textContent = ['A', 'B', 'C'].map((thread) => `${thread}.ctx.rsp → ${state.saved[thread] === 'trampoline' ? '&trampoline（未開始）' : '前回の st_ctx_swap 呼出し直後'}`).join('\n');
+      $('task').textContent = isDone ? '' : 'まず次のスレッドと ret の行き先を予測してください。確認に成功するまで状態は変わりません。';
+      $('next-thread').disabled = isDone;
+      $('ret-target').disabled = isDone;
+      $('reason').disabled = isDone;
+      $('check').disabled = isDone;
+      $('hint').disabled = isDone;
+      $('advance').hidden = true;
+      $('feedback').textContent = '';
+      $('feedback').className = 'feedback';
+      $('result').hidden = true;
+      $('hint-text').hidden = true;
+      $('next-thread').value = '';
+      $('ret-target').value = '';
+      $('reason').value = '';
+      solved = false;
+      hintLevel = 0;
+    }
+
+    $('check').addEventListener('click', () => {
+      const expected = prediction();
+      const chosenNext = $('next-thread').value;
+      const chosenTarget = $('ret-target').value;
+      if (!chosenNext || !chosenTarget || !$('reason').value.trim()) {
+        $('feedback').textContent = '二つの予測と、その理由を入力してください。';
+        $('feedback').className = 'feedback error';
+        return;
+      }
+      if (chosenNext !== expected.next || chosenTarget !== expected.target) {
+        const parts = [];
+        if (chosenNext !== expected.next) parts.push('ready queue の先頭をもう一度追ってください');
+        if (chosenTarget !== expected.target) parts.push('選ばれたスレッドの ctx.rsp を確認してください');
+        $('feedback').textContent = parts.join('。') + '。';
+        $('feedback').className = 'feedback error';
+        return;
+      }
+      solved = true;
+      $('feedback').textContent = '予測が一致しました。なぜそうなるかを確認してから切り替えてください。';
+      $('feedback').className = 'feedback success';
+      $('result').textContent = expected.target === 'trampoline'
+        ? `${expected.next} は未開始です。初期スタックの先頭に置いた &trampoline を ret が取り出します。trampoline は current->fn(current->arg) を呼びます。`
+        : `${expected.next} は以前 yield しています。保存された rsp が st_ctx_swap の呼出し直後の戻り先を指し、そこから呼出し元へ順に戻ります。`;
+      $('result').hidden = false;
+      $('advance').hidden = false;
+    });
+
+    $('hint').addEventListener('click', () => {
+      hintLevel = Math.min(hintLevel + 1, 2);
+      const expected = prediction();
+      $('hint-text').textContent = hintLevel === 1
+        ? state.current === 'main'
+          ? 'st_start() は main を queue に入れません。ready queue の先頭を選びます。'
+          : `st_yield() は ${state.current} を末尾へ入れてから、先頭を取り出します。`
+        : `切替え直前の queue は ${expected.afterPush.join(' → ')}。先頭の ctx.rsp が &trampoline なら初回開始、保存した継続先なら再開です。`;
+      $('hint-text').hidden = false;
+    });
+
+    $('advance').addEventListener('click', () => {
+      if (!solved) return;
+      const expected = prediction();
+      if (state.current !== 'main') state.queue.push(state.current);
+      state.saved[state.current] = 'continuation';
+      state.current = state.queue.shift();
+      if (state.current !== expected.next) throw new Error('queue model mismatch');
+      state.step++;
+      render();
+    });
+
+    $('transfer-check').addEventListener('click', () => {
+      const answer = $('transfer-answer').value;
+      $('transfer-feedback').textContent = !answer ? '一つ選択してください。'
+        : answer === 'exit'
+          ? '正解。trampoline は fn(arg) の return 後に _exit(0) を呼ぶため、B と C も含むプロセス全体が終わります。'
+          : '再確認。st.c の trampoline() は fn(arg) が return した直後に _exit(0) を呼びます。';
+    });
+
+    $('restart').addEventListener('click', () => {
+      state.current = 'main';
+      state.queue = ['A', 'B', 'C'];
+      state.saved = { A: 'trampoline', B: 'trampoline', C: 'trampoline', main: 'none' };
+      state.step = 0;
+      $('transfer-answer').value = '';
+      $('transfer-feedback').textContent = '';
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>
