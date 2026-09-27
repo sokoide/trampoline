@@ -43,7 +43,7 @@
     <section class="panel" aria-labelledby="goal-heading">
       <h2 id="goal-heading">到達目標</h2>
       <p>各切替えで次に実行する論理スレッドと <code>st_ctx_swap</code> の <code>ret</code> の行き先を予測し、その根拠を「queue の操作」と「<code>ctx.rsp</code> が指す値」で説明できる。</p>
-      <p>これは <a href="st.c">st.c</a> と <a href="ctx.S">ctx.S</a> の動作を記号化したモデルです。実際のレジスタ値やアドレスを表示する実行器ではありません。実機の確認には README の gdb 演習を使ってください。</p>
+      <p>これは <a href="https://github.com/sokoide/trampoline/blob/main/st.c">st.c</a> と <a href="https://github.com/sokoide/trampoline/blob/main/ctx.S">ctx.S</a> の動作を記号化したモデルです。実際のレジスタ値やアドレスを表示する実行器ではありません。実機の確認には README の gdb 演習を使ってください。</p>
     </section>
 
     <section class="panel" aria-labelledby="lab-heading">
@@ -70,8 +70,19 @@
         <option value="worker">worker の先頭</option>
         <option value="main">main の次の命令</option>
       </select>
-      <label for="reason">予測した理由（queue の変化と、選ばれる ctx.rsp の値）</label>
-      <textarea id="reason" placeholder="例：現在のスレッドを末尾に入れた後、先頭は…"></textarea>
+      <label for="queue-reason">queue はどう操作される？</label>
+      <select id="queue-reason">
+        <option value="">選択してください</option>
+        <option></option>
+        <option></option>
+      </select>
+      <label for="rsp-reason">切替え先（next）の <code>ctx.rsp</code> は、切替え前に何を指している？</label>
+      <select id="rsp-reason">
+        <option value="">選択してください</option>
+        <option value="trampoline">初期スタック上の <code>&amp;trampoline</code></option>
+        <option value="continuation">前回の <code>st_ctx_swap</code> 呼出し直後（次に実行する命令）</option>
+      </select>
+      <p class="hint">ここで尋ねているのは切替え先の値です。切替え元（prev）の <code>ctx.rsp</code> には、今回の <code>st_ctx_swap</code> 呼出し直後へ戻るための <code>rsp</code> が保存されます。</p>
       <div>
         <button id="check" type="button">予測を確認</button>
         <button id="hint" type="button" class="secondary">ヒントを見る</button>
@@ -94,7 +105,7 @@
       </select>
       <button id="transfer-check" type="button">理由を確認</button>
       <p id="transfer-feedback" role="status" aria-live="polite"></p>
-      <p>実物で確かめるには <a href="README.md#最初の-trampoline-到着">gdb の観察手順</a>へ進み、<code>ret</code> 直後の <code>rsp</code> とスタックの値を予測してから見る。</p>
+      <p>実物で確かめるには <a href="https://github.com/sokoide/trampoline/blob/main/README.md#最初の-trampoline-到着">gdb の観察手順</a>へ進み、<code>ret</code> 直後の <code>rsp</code> とスタックの値を予測してから見る。</p>
       <button id="restart" type="button" class="secondary">最初からやり直す</button>
     </section>
   </main>
@@ -122,11 +133,24 @@
       $('action').textContent = isDone ? 'A が再開しました。' : state.current === 'main' ? 'main が st_start() を呼びます。' : `${state.current} が st_yield() を呼びます。`;
       $('current').textContent = state.current;
       $('queue').textContent = state.queue.join(' → ') || '空';
+      const queueOptions = $('queue-reason').options;
+      if (state.current === 'main') {
+        queueOptions[1].value = 'start';
+        queueOptions[1].textContent = 'main は queue に入らず、先頭を取り出す';
+        queueOptions[2].value = 'yield';
+        queueOptions[2].textContent = 'main を queue の末尾に入れてから、先頭を取り出す';
+      } else {
+        queueOptions[1].value = 'yield';
+        queueOptions[1].textContent = `${state.current} を queue の末尾に入れてから、先頭を取り出す`;
+        queueOptions[2].value = 'start';
+        queueOptions[2].textContent = `${state.current} は queue に入れず、先頭を取り出す`;
+      }
       $('contexts').textContent = ['A', 'B', 'C'].map((thread) => `${thread}.ctx.rsp → ${state.saved[thread] === 'trampoline' ? '&trampoline（未開始）' : '前回の st_ctx_swap 呼出し直後'}`).join('\n');
       $('task').textContent = isDone ? '' : 'まず次のスレッドと ret の行き先を予測してください。確認に成功するまで状態は変わりません。';
       $('next-thread').disabled = isDone;
       $('ret-target').disabled = isDone;
-      $('reason').disabled = isDone;
+      $('queue-reason').disabled = isDone;
+      $('rsp-reason').disabled = isDone;
       $('check').disabled = isDone;
       $('hint').disabled = isDone;
       $('advance').hidden = true;
@@ -136,7 +160,8 @@
       $('hint-text').hidden = true;
       $('next-thread').value = '';
       $('ret-target').value = '';
-      $('reason').value = '';
+      $('queue-reason').value = '';
+      $('rsp-reason').value = '';
       solved = false;
       hintLevel = 0;
     }
@@ -145,15 +170,18 @@
       const expected = prediction();
       const chosenNext = $('next-thread').value;
       const chosenTarget = $('ret-target').value;
-      if (!chosenNext || !chosenTarget || !$('reason').value.trim()) {
-        $('feedback').textContent = '二つの予測と、その理由を入力してください。';
+      const queueReason = state.current === 'main' ? 'start' : 'yield';
+      if (!chosenNext || !chosenTarget || !$('queue-reason').value || !$('rsp-reason').value) {
+        $('feedback').textContent = '二つの予測と、queue・ctx.rsp の理由を選んでください。';
         $('feedback').className = 'feedback error';
         return;
       }
-      if (chosenNext !== expected.next || chosenTarget !== expected.target) {
+      if (chosenNext !== expected.next || chosenTarget !== expected.target || $('queue-reason').value !== queueReason || $('rsp-reason').value !== expected.target) {
         const parts = [];
         if (chosenNext !== expected.next) parts.push('ready queue の先頭をもう一度追ってください');
         if (chosenTarget !== expected.target) parts.push('選ばれたスレッドの ctx.rsp を確認してください');
+        if ($('queue-reason').value !== queueReason) parts.push('queue の操作を確認してください');
+        if ($('rsp-reason').value !== expected.target) parts.push('ctx.rsp が指す値を確認してください');
         $('feedback').textContent = parts.join('。') + '。';
         $('feedback').className = 'feedback error';
         return;
@@ -193,9 +221,9 @@
     $('transfer-check').addEventListener('click', () => {
       const answer = $('transfer-answer').value;
       $('transfer-feedback').textContent = !answer ? '一つ選択してください。'
-        : answer === 'exit'
+        : `${answer === 'exit'
           ? '正解。trampoline は fn(arg) の return 後に _exit(0) を呼ぶため、B と C も含むプロセス全体が終わります。'
-          : '再確認。st.c の trampoline() は fn(arg) が return した直後に _exit(0) を呼びます。';
+          : '再確認。st.c の trampoline() は fn(arg) が return した直後に _exit(0) を呼びます。'} 各スレッドは初回の切替えで trampoline に入ります。A が yield 後に再開するときは trampoline ではなく、保存された ctx.rsp が指す前回の st_ctx_swap 呼出し直後から続きます。`;
     });
 
     $('restart').addEventListener('click', () => {

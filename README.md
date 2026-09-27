@@ -35,7 +35,7 @@ Shadow Stack が有効なら通常スタックと整合せず失敗します。�
 
 ## 段階式の演習
 
-[ブラウザ演習「どこへ `ret` する？」](learning_lab.html) は、`st_start()` から
+[ブラウザ演習「どこへ `ret` する？」](https://sokoide.github.io/trampoline/learning_lab.html) は、`st_start()` から
 A・B・C の yield と A の再開までを、**予測 → 操作 → 理由の確認**の順に進めます。
 ブラウザでファイルを開くだけで使え、Linux 環境は不要です。画面は実装を記号化した
 モデルであり、実際のアドレスやレジスタ値は gdb で確認します。

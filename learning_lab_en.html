@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>trampoline: Predict where ret goes</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, sans-serif; color: #183044; background: #f4f7f8; }
+    * { box-sizing: border-box; }
+    body { max-width: 940px; margin: 0 auto; padding: 2rem 1rem 4rem; line-height: 1.65; }
+    h1, h2 { line-height: 1.25; }
+    h1 { margin-bottom: .3rem; }
+    .lead { color: #43596a; margin-top: 0; }
+    .panel { background: white; border: 1px solid #ccd9df; border-radius: 12px; padding: 1.3rem; margin: 1rem 0; box-shadow: 0 2px 8px #193b5010; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; }
+    .state { background: #eaf2f6; border-radius: 8px; padding: .8rem 1rem; }
+    .state strong { display: block; font-size: .9rem; color: #38566b; }
+    .state span { font-size: 1.25rem; font-weight: 700; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    pre { overflow-x: auto; background: #152b3a; color: #ecf5f8; padding: 1rem; border-radius: 8px; line-height: 1.5; }
+    label { display: block; font-weight: 650; margin: .8rem 0 .25rem; }
+    select, button, textarea { font: inherit; padding: .55rem .7rem; border-radius: 7px; }
+    select, textarea { width: min(100%, 520px); border: 1px solid #829baa; background: white; }
+    textarea { display: block; min-height: 5rem; resize: vertical; }
+    button { border: 1px solid #0e617e; background: #0e617e; color: white; cursor: pointer; margin: .7rem .5rem .2rem 0; }
+    button.secondary { color: #0e617e; background: white; }
+    button:disabled { opacity: .5; cursor: default; }
+    button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #eea62f; outline-offset: 2px; }
+    .feedback { min-height: 2.2rem; font-weight: 600; }
+    .feedback.error { color: #a03329; }
+    .feedback.success { color: #17664c; }
+    .hint { border-left: 4px solid #daa332; padding: .4rem .8rem; background: #fff7df; }
+    .result { border-left: 4px solid #3a9a79; padding: .4rem .8rem; background: #e7f6ee; }
+    .progress { font-weight: 650; color: #255875; }
+    a { color: #075b7a; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Where does <code>ret</code> go?</h1>
+    <p class="lead">Explore the difference between a thread's first start and a later resume by tracking the ready queue and saved <code>rsp</code>. This exercise runs in your browser.</p>
+    <section class="panel" aria-labelledby="goal-heading">
+      <h2 id="goal-heading">Learning goal</h2>
+      <p>For each switch, predict which logical thread runs next and where <code>ret</code> in <code>st_ctx_swap</code> goes. Explain your reasoning using the queue operation and the value referenced by <code>ctx.rsp</code>.</p>
+      <p>This is a symbolic model of <a href="https://github.com/sokoide/trampoline/blob/main/st.c">st.c</a> and <a href="https://github.com/sokoide/trampoline/blob/main/ctx.S">ctx.S</a>. It does not execute the code or show actual register values or addresses. Use the gdb exercise in the README to inspect the real program.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="lab-heading">
+      <h2 id="lab-heading">Predict the switch</h2>
+      <p id="progress" class="progress"></p>
+      <p id="action"></p>
+      <div class="grid" aria-live="polite">
+        <div class="state"><strong>Currently running</strong><span id="current"></span></div>
+        <div class="state"><strong>Ready queue (head → tail)</strong><span id="queue"></span></div>
+      </div>
+      <pre id="contexts"></pre>
+      <p id="task"></p>
+      <label for="next-thread">Which thread runs after the switch?</label>
+      <select id="next-thread">
+        <option value="">Select an answer</option>
+        <option value="A">A</option><option value="B">B</option><option value="C">C</option>
+        <option value="main">main</option>
+      </select>
+      <label for="ret-target">Where does <code>ret</code> in <code>st_ctx_swap</code> go?</label>
+      <select id="ret-target">
+        <option value="">Select an answer</option>
+        <option value="trampoline">The new thread's trampoline</option>
+        <option value="continuation">Just after the previous st_ctx_swap call</option>
+        <option value="worker">The start of the worker function</option>
+        <option value="main">The next instruction in main</option>
+      </select>
+      <label for="queue-reason">How is the queue changed?</label>
+      <select id="queue-reason">
+        <option value="">Select an answer</option>
+        <option></option>
+        <option></option>
+      </select>
+      <label for="rsp-reason">Before the switch, what does the destination thread's (<code>next</code>) <code>ctx.rsp</code> point to?</label>
+      <select id="rsp-reason">
+        <option value="">Select an answer</option>
+        <option value="trampoline"><code>&amp;trampoline</code> on its initial stack</option>
+        <option value="continuation">Just after its previous <code>st_ctx_swap</code> call (the next instruction to execute)</option>
+      </select>
+      <p class="hint">This asks about the destination thread. The source thread's (<code>prev</code>) <code>ctx.rsp</code> is saved so it can resume just after this <code>st_ctx_swap</code> call.</p>
+      <div>
+        <button id="check" type="button">Check prediction</button>
+        <button id="hint" type="button" class="secondary">Show a hint</button>
+        <button id="advance" type="button" hidden>Perform the switch and continue</button>
+      </div>
+      <p id="hint-text" class="hint" hidden></p>
+      <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
+      <p id="result" class="result" hidden></p>
+    </section>
+
+    <section id="transfer" class="panel" hidden aria-labelledby="transfer-heading">
+      <h2 id="transfer-heading">Apply the idea to another situation</h2>
+      <p>Use the path you predicted to answer the question. Before checking, say or write down your reasoning.</p>
+      <label for="transfer-answer">If A's <code>worker</code> returns, what happens to B and C?</label>
+      <select id="transfer-answer">
+        <option value="">Select an answer</option>
+        <option value="continue">B and C continue</option>
+        <option value="exit">The entire process exits</option>
+        <option value="main">Execution returns to main</option>
+      </select>
+      <button id="transfer-check" type="button">Check your reasoning</button>
+      <p id="transfer-feedback" role="status" aria-live="polite"></p>
+      <p>To inspect the real program, follow the <a href="https://github.com/sokoide/trampoline/blob/main/README_en.md#first-arrival-at-the-trampoline">gdb observation steps</a>. Predict the value of <code>rsp</code> and the stack contents immediately after <code>ret</code> before inspecting them.</p>
+      <button id="restart" type="button" class="secondary">Start over</button>
+    </section>
+  </main>
+  <script>
+    'use strict';
+
+    // Symbolic model of st.c: ready_push, ready_pop, and st_ctx_swap.
+    const state = { current: 'main', queue: ['A', 'B', 'C'], saved: { A: 'trampoline', B: 'trampoline', C: 'trampoline', main: 'none' }, step: 0 };
+    const totalSteps = 4;
+    const $ = (id) => document.getElementById(id);
+    let solved = false;
+    let hintLevel = 0;
+
+    function prediction() {
+      const afterPush = state.current === 'main' ? [...state.queue] : [...state.queue, state.current];
+      const next = afterPush[0];
+      return { afterPush, next, target: state.saved[next] };
+    }
+
+    function render() {
+      const isDone = state.step === totalSteps;
+      $('transfer').hidden = !isDone;
+      $('lab-heading').textContent = isDone ? 'You have completed all four switches' : 'Predict the switch';
+      $('progress').textContent = isDone ? 'Complete' : `Step ${state.step + 1} / ${totalSteps}`;
+      $('action').textContent = isDone ? 'A has resumed.' : state.current === 'main' ? 'main calls st_start().' : `${state.current} calls st_yield().`;
+      $('current').textContent = state.current;
+      $('queue').textContent = state.queue.join(' → ') || 'Empty';
+      const queueOptions = $('queue-reason').options;
+      if (state.current === 'main') {
+        queueOptions[1].value = 'start';
+        queueOptions[1].textContent = 'main is not enqueued; pop the head of the ready queue';
+        queueOptions[2].value = 'yield';
+        queueOptions[2].textContent = 'enqueue main at the tail, then pop the head';
+      } else {
+        queueOptions[1].value = 'yield';
+        queueOptions[1].textContent = `enqueue ${state.current} at the tail, then pop the head`;
+        queueOptions[2].value = 'start';
+        queueOptions[2].textContent = `do not enqueue ${state.current}; pop the head`;
+      }
+      $('contexts').textContent = ['A', 'B', 'C'].map((thread) => `${thread}.ctx.rsp → ${state.saved[thread] === 'trampoline' ? '&trampoline (not started)' : 'just after the previous st_ctx_swap call'}`).join('\n');
+      $('task').textContent = isDone ? '' : 'Predict the next thread and the destination of ret. The state will not change until your prediction is correct.';
+      $('next-thread').disabled = isDone;
+      $('ret-target').disabled = isDone;
+      $('queue-reason').disabled = isDone;
+      $('rsp-reason').disabled = isDone;
+      $('check').disabled = isDone;
+      $('hint').disabled = isDone;
+      $('advance').hidden = true;
+      $('feedback').textContent = '';
+      $('feedback').className = 'feedback';
+      $('result').hidden = true;
+      $('hint-text').hidden = true;
+      $('next-thread').value = '';
+      $('ret-target').value = '';
+      $('queue-reason').value = '';
+      $('rsp-reason').value = '';
+      solved = false;
+      hintLevel = 0;
+    }
+
+    $('check').addEventListener('click', () => {
+      const expected = prediction();
+      const chosenNext = $('next-thread').value;
+      const chosenTarget = $('ret-target').value;
+      const queueReason = state.current === 'main' ? 'start' : 'yield';
+      if (!chosenNext || !chosenTarget || !$('queue-reason').value || !$('rsp-reason').value) {
+        $('feedback').textContent = 'Select both predictions and a reason for the queue and ctx.rsp.';
+        $('feedback').className = 'feedback error';
+        return;
+      }
+      if (chosenNext !== expected.next || chosenTarget !== expected.target || $('queue-reason').value !== queueReason || $('rsp-reason').value !== expected.target) {
+        const parts = [];
+        if (chosenNext !== expected.next) parts.push('Trace the head of the ready queue again');
+        if (chosenTarget !== expected.target) parts.push('Check the destination thread\'s ctx.rsp');
+        if ($('queue-reason').value !== queueReason) parts.push('Check how the queue is changed');
+        if ($('rsp-reason').value !== expected.target) parts.push('Check what ctx.rsp points to');
+        $('feedback').textContent = parts.join('. ') + '.';
+        $('feedback').className = 'feedback error';
+        return;
+      }
+      solved = true;
+      $('feedback').textContent = 'Your prediction is correct. Review why, then perform the switch.';
+      $('feedback').className = 'feedback success';
+      $('result').textContent = expected.target === 'trampoline'
+        ? `${expected.next} has not started yet. ret pops &trampoline from the top of its initial stack. The trampoline calls current->fn(current->arg).`
+        : `${expected.next} has yielded before. Its saved rsp points just after the st_ctx_swap call, so execution resumes there and returns through its callers.`;
+      $('result').hidden = false;
+      $('advance').hidden = false;
+    });
+
+    $('hint').addEventListener('click', () => {
+      hintLevel = Math.min(hintLevel + 1, 2);
+      const expected = prediction();
+      $('hint-text').textContent = hintLevel === 1
+        ? state.current === 'main'
+          ? 'st_start() does not enqueue main. It selects the head of the ready queue.'
+          : `st_yield() enqueues ${state.current} at the tail, then selects the head.`
+        : `Just before the switch, the queue is ${expected.afterPush.join(' → ')}. If the head thread's ctx.rsp points to &trampoline, it is starting for the first time; otherwise it resumes at its saved continuation.`;
+      $('hint-text').hidden = false;
+    });
+
+    $('advance').addEventListener('click', () => {
+      if (!solved) return;
+      const expected = prediction();
+      if (state.current !== 'main') state.queue.push(state.current);
+      state.saved[state.current] = 'continuation';
+      state.current = state.queue.shift();
+      if (state.current !== expected.next) throw new Error('queue model mismatch');
+      state.step++;
+      render();
+    });
+
+    $('transfer-check').addEventListener('click', () => {
+      const answer = $('transfer-answer').value;
+      $('transfer-feedback').textContent = !answer ? 'Select an answer.'
+        : `${answer === 'exit'
+          ? 'Correct. After fn(arg) returns, the trampoline calls _exit(0), which terminates the entire process, including B and C.'
+          : 'Review the code: trampoline() in st.c calls _exit(0) immediately after fn(arg) returns.'} Each thread enters the trampoline on its first switch. When A resumes after yielding, it does not return to the trampoline; it continues just after the previous st_ctx_swap call, as pointed to by its saved ctx.rsp.`;
+    });
+
+    $('restart').addEventListener('click', () => {
+      state.current = 'main';
+      state.queue = ['A', 'B', 'C'];
+      state.saved = { A: 'trampoline', B: 'trampoline', C: 'trampoline', main: 'none' };
+      state.step = 0;
+      $('transfer-answer').value = '';
+      $('transfer-feedback').textContent = '';
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>

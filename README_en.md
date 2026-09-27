@@ -36,7 +36,7 @@ but look them up first if the terms are unfamiliar.
 
 ## Guided interactive exercise
 
-Open [the browser exercise](learning_lab.html) (Japanese interface) to predict the next logical thread and
+Open the [English browser exercise](https://sokoide.github.io/trampoline/learning_lab_en.html) or the [Japanese browser exercise](https://sokoide.github.io/trampoline/learning_lab.html) to predict the next logical thread and
 `ret` target at each switch, then check your reasoning against the symbolic queue and
 saved `rsp`. It runs locally without Linux; it models the code but does not execute it.
 Predict the first entry and A's later resume before starting. Afterward, explain the
