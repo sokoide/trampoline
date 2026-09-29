@@ -42,14 +42,13 @@ only open the file in a browser; no Linux environment is needed. The page is a s
 model of the implementation; confirm actual addresses and register values with gdb.
 
 The goal is to be able to explain, from the ready queue and `ctx.rsp`, which logical
-thread runs next and where `ret` in `st_ctx_swap` goes. Before reading the rest of this
-document, write down your prediction for "where does the first `ret` jump" and "where
-does A return when it resumes after one round"; after the exercise, answer the same
-questions with reasons.
+thread runs next and where `ret` in `st_ctx_swap` goes. After reading the sections
+below, predict where the first `ret` jumps and where A resumes after one round.
+After the exercise, answer both with reasons.
 
 Plan for 15–20 minutes. Read [Prerequisites](#prerequisites) and sections 1–3 of
-[Context switch](#context-switch) first, and distinguish `ctx.rsp` (a location on the
-stack) from `memory[ctx.rsp]` (the return destination stored there).
+[Context switch](#context-switch) first. `ctx.rsp` holds the address of a location
+on the stack; `memory[ctx.rsp]` is the return address stored at that location.
 
 1. In the "pre-start prediction" box on the page, write how the first start differs from A's resume.
 2. Work through the four steps of the exercise. On a wrong answer, review the queue and the saved stacks. The fourth step closes its clue, so recall it on your own first and open it only if needed.
@@ -64,9 +63,9 @@ directly in your browser.
 
 When checking whether an explanation is correct, see whether **the queue change, the
 selected `ctx.rsp`, and the destination after `ret`** can each be stated separately.
-Correct answers and ease of use in the exercise are not treated as demonstrating a
-measured learning gain. Comparing the initial prediction with the post-exercise
-explanation is what confirms understanding with this material.
+Correct answers and ease of use in the exercise do not demonstrate a measured
+learning gain. Compare the initial prediction with the post-exercise explanation
+to check understanding; learning outcomes with actual learners remain unmeasured.
 
 ## Table of contents
 
@@ -181,7 +180,8 @@ high address
 low address
 ```
 
-`ctx.rsp` points to `&trampoline`. There is no ordinary `call trampoline`. Instead,
+`ctx.rsp` holds the address of the stack location containing `&trampoline`. There is
+no ordinary `call trampoline`. Instead,
 `st_ctx_swap`, after restoring the next context, executes `ret` from that position;
 `ret` pops `&trampoline` and jumps directly to the trampoline.
 

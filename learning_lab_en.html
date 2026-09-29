@@ -53,7 +53,7 @@
       <pre>save:    prev.ctx.rsp = rsp
 restore: rsp = next.ctx.rsp
 ret:     rip = memory[rsp]; rsp = rsp + 8</pre>
-      <p>This excerpt shows only rsp and ret. The implementation also saves and restores the other registers and the FP control state. The call chain assumes the README's standard build (no optimization).</p>
+      <p>This excerpt shows only <code>rsp</code> and <code>ret</code>. The implementation also saves and restores other registers and FP control state. The call chain shown in the README assumes its standard build without optimization.</p>
       <label for="before">Pre-start prediction: why does the destination of ret differ between main → A's first start and C → A's resume?</label>
       <textarea id="before" placeholder="Explain it using what the queue selects, where the value is saved, and the value at that location. Note anything you are unsure about as well."></textarea>
       <p>Notes are kept only while this page is open. They disappear on reload, so copy them if you need them.</p>
@@ -69,7 +69,7 @@ ret:     rip = memory[rsp]; rsp = rsp + 8</pre>
       </div>
       <details id="context-help" open><summary>Saved-stack clue (close it once you are comfortable)</summary>
       <pre id="contexts"></pre>
-      <p>A running thread's ctx.rsp is a record from when it was saved, not the CPU's current rsp.</p></details>
+      <p>A running thread's <code>ctx.rsp</code> retains the address saved at its last switch; it is not the CPU's current <code>rsp</code>.</p></details>
       <p id="task"></p>
       <label for="next-thread">Which thread runs after the switch?</label>
       <select id="next-thread">
@@ -97,7 +97,7 @@ ret:     rip = memory[rsp]; rsp = rsp + 8</pre>
         <option value="trampoline">The trampoline address placed on its initial stack</option>
         <option value="continuation">The return address to just after the destination thread's own previous st_ctx_swap call</option>
       </select>
-      <p class="hint">This asks about the destination thread. The source thread's (<code>prev</code>) <code>ctx.rsp</code> is saved so it can resume just after this <code>st_ctx_swap</code> call.</p>
+      <p class="hint">This asks about the destination thread. The source thread's (<code>prev</code>) <code>ctx.rsp</code> receives the current <code>rsp</code>, which points to the return address for this <code>st_ctx_swap</code> call.</p>
       <div>
         <button id="check" type="button">Check prediction</button>
         <button id="hint" type="button" class="secondary">Show a hint</button>
@@ -139,8 +139,8 @@ ret:     rip = memory[rsp]; rsp = rsp + 8</pre>
       <details><summary>Self-check of your explanation (open it after writing)</summary>
         <ul><li>The queue selects the next thread, and the destination of ret is determined by the value on that thread's stack.</li>
         <li>The first start uses the trampoline address that setup_stack placed.</li>
-        <li>When A yields, its rsp is saved into A.ctx.rsp and restored when A resumes. ret returns to the continuation stored there.</li>
-        <li>What ret advances is the CPU's rsp. It does not automatically rewrite the saved location A.ctx.rsp.</li></ul>
+        <li>When A yields, the CPU's <code>rsp</code> is saved into <code>A.ctx.rsp</code>. On A's resume, that address is restored into the CPU's <code>rsp</code>, and <code>ret</code> takes the return address from A's stack.</li>
+        <li><code>ret</code> advances the CPU's <code>rsp</code>. It does not update the saved <code>A.ctx.rsp</code> field.</li></ul>
       </details>
       <button id="restart" type="button" class="secondary">Start over, keeping your prediction notes</button>
     </section>
@@ -161,7 +161,7 @@ ret:     rip = memory[rsp]; rsp = rsp + 8</pre>
       { question: 'A yields. The queue is C → B, and C has already started. Which thread runs next, and where does ret go?', options: ["B's trampoline", "C's saved continuation", "C's trampoline"], answer: 1, why: 'The order is FIFO, not by name, so C runs. A thread that has already started resumes from its saved continuation.' },
       { question: 'Right after a restore, rsp = 0x1000, memory[0x1000] = &trampoline, and memory[0x1008] = 0. What is rsp right after ret?', options: ['0x1000', '0x0', '0x1008'], answer: 2, why: 'ret pops the 8-byte return destination and adds 8 to rsp. It jumps to the trampoline, and the next value on the stack is 0.' },
       { question: 'main.ctx.rsp saved the stack location that holds the continuation. Does control return to main later?', options: ['Not just by being saved', 'Always right after C', 'After every yield'], answer: 0, why: 'Saving and selecting are separate. main never enters the ready queue, so this implementation never selects it again.' },
-      { question: 'Only A is created, and A yields. The queue is now empty. What happens?', options: ['The queue is empty, so _exit(1)', 'Returns to main', "Returns to A's own continuation"], answer: 2, why: 'A is appended to the tail first, and then that same A is popped. Even when prev and next are the same, the saved rsp is restored and ret returns there.' }
+      { question: 'Only A was created. The ready queue is empty when A calls st_yield(). What happens?', options: ['The queue is empty, so _exit(1)', 'Returns to main', "Returns to A's own continuation"], answer: 2, why: 'A is appended to the tail first, and then that same A is popped. Even when prev and next are the same, the saved rsp is restored and ret returns there.' }
     ];
     review.forEach((item, i) => {
       const label = document.createElement('label');
