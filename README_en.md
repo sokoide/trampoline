@@ -192,6 +192,20 @@ The trampoline calls `_exit(0)` after `fn` returns, so normal execution never us
 `0`. If the trampoline returned by mistake, its `ret` would try to jump to address 0
 and terminate abnormally.
 
+Note what the alignment rule actually requires: it is not that `rsp` lands on a
+16-byte boundary at the function entry. The requirement is that `rsp` be 16-byte
+aligned at the point of each `call`; since `call` pushes an 8-byte return address,
+the specified entry state is `rsp + 8` being a multiple of 16 — that is,
+`rsp % 16 == 8`. The `ret` into the trampoline pops `&trampoline` into `rip` and
+advances `rsp` by 8, reproducing exactly the stack state right after a real
+`call trampoline`; the `0` is the stand-in for the return address that call would
+have pushed. Without this 8-byte word, `rsp` would land on a 16-byte boundary at
+the entry — off by 8 from the state the ABI specifies. Compilers lay out frames
+assuming `rsp % 16 == 8` at entry, so an 8-byte shift would leave `rsp` misaligned
+at every subsequent `call` in the trampoline → worker → library chain, and SSE
+instructions that require 16-byte alignment (such as `movaps` on stack slots inside
+libc) could fault with SIGSEGV.
+
 ### 2. The first context switch
 
 When `main()` calls `st_start()`, the `switch_to_next()` inside it selects the head
