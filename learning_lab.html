@@ -39,11 +39,24 @@
 <body>
   <main>
     <h1>どこへ <code>ret</code> する？</h1>
-    <p class="lead">ready queue と保存された <code>rsp</code> を操作して、初回開始と再開の違いを確かめる演習です。ブラウザだけで動きます。</p>
+    <p class="lead">ready queue と保存された <code>rsp</code> を追って、初回開始と再開の違いを確かめる演習です。ブラウザだけで動きます。</p>
     <section class="panel" aria-labelledby="goal-heading">
       <h2 id="goal-heading">到達目標</h2>
       <p>各切替えで次に実行する論理スレッドと <code>st_ctx_swap</code> の <code>ret</code> の行き先を予測し、その根拠を「queue の操作」と「<code>ctx.rsp</code> が指す値」で説明できる。</p>
       <p>これは <a href="https://github.com/sokoide/trampoline/blob/main/st.c">st.c</a> と <a href="https://github.com/sokoide/trampoline/blob/main/ctx.S">ctx.S</a> の動作を記号化したモデルです。実際のレジスタ値やアドレスを表示する実行器ではありません。実機の確認には README の gdb 演習を使ってください。</p>
+    </section>
+
+    <section class="panel" aria-labelledby="prepare-heading">
+      <h2 id="prepare-heading">始める前に（約3分）</h2>
+      <p>目安は全体で15〜20分。<a href="https://github.com/sokoide/trampoline/blob/main/README.md#前提知識">README の前提知識</a>と「コンテキストスイッチ」の1〜3を先に読んでください。</p>
+      <p><code>ctx.rsp</code> はスタック上の<strong>場所のアドレス</strong>です。その場所に入った値が戻り先です。以下の <code>memory[ctx.rsp]</code> はその場所の8バイトを表します。</p>
+      <pre>保存: prev.ctx.rsp = rsp
+復元: rsp = next.ctx.rsp
+ret : rip = memory[rsp]; rsp = rsp + 8</pre>
+      <p>この図は rsp と ret のみを抜粋しています。実装は他のレジスタとFP制御状態も保存・復元します。呼出し連鎖は README の標準ビルド（最適化なし）を前提にします。</p>
+      <label for="before">開始前の予測：main → A の初回と、C → A の再開で、ret の行き先が違うのはなぜ？</label>
+      <textarea id="before" placeholder="queue が選ぶもの、保存する場所、その場所の値を使って説明。わからない点も記録。"></textarea>
+      <p>メモはこのページを開いている間だけ保持します。再読み込みで消えるため、必要ならコピーしてください。</p>
     </section>
 
     <section class="panel" aria-labelledby="lab-heading">
@@ -54,7 +67,9 @@
         <div class="state"><strong>現在実行中</strong><span id="current"></span></div>
         <div class="state"><strong>ready queue（先頭 → 末尾）</strong><span id="queue"></span></div>
       </div>
+      <details id="context-help" open><summary>保存済みスタックの手がかり（慣れたら閉じる）</summary>
       <pre id="contexts"></pre>
+      <p>実行中スレッドの ctx.rsp は保存時点の記録であり、現在のCPUの rsp ではありません。</p></details>
       <p id="task"></p>
       <label for="next-thread">切替え後に実行するのは？</label>
       <select id="next-thread">
@@ -66,7 +81,7 @@
       <select id="ret-target">
         <option value="">選択してください</option>
         <option value="trampoline">新スレッドの trampoline</option>
-        <option value="continuation">前回の st_ctx_swap 呼出し直後</option>
+        <option value="continuation">切替え先のスレッド自身が以前 st_ctx_swap を呼び出した直後</option>
         <option value="worker">worker の先頭</option>
         <option value="main">main の次の命令</option>
       </select>
@@ -76,11 +91,11 @@
         <option></option>
         <option></option>
       </select>
-      <label for="rsp-reason">切替え先（next）の <code>ctx.rsp</code> は、切替え前に何を指している？</label>
+      <label for="rsp-reason">切替え先（next）の <code>ctx.rsp</code> は、切替え前に指している場所には何が入っている？</label>
       <select id="rsp-reason">
         <option value="">選択してください</option>
-        <option value="trampoline">初期スタック上の <code>&amp;trampoline</code></option>
-        <option value="continuation">前回の <code>st_ctx_swap</code> 呼出し直後（次に実行する命令）</option>
+        <option value="trampoline">初期スタックに置いた trampoline のアドレス</option>
+        <option value="continuation">切替え先のスレッド自身が以前 st_ctx_swap を呼び出した直後へ戻るアドレス</option>
       </select>
       <p class="hint">ここで尋ねているのは切替え先の値です。切替え元（prev）の <code>ctx.rsp</code> には、今回の <code>st_ctx_swap</code> 呼出し直後へ戻るための <code>rsp</code> が保存されます。</p>
       <div>
@@ -91,6 +106,12 @@
       <p id="hint-text" class="hint" hidden></p>
       <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
       <p id="result" class="result" hidden></p>
+    </section>
+
+    <section class="panel" aria-labelledby="history-heading">
+      <h2 id="history-heading">実行した切替えの記録</h2>
+      <p id="record-summary">まだ切り替えていません。予測が一致したら実行してください。</p>
+      <ol id="history"></ol>
     </section>
 
     <section id="transfer" class="panel" hidden aria-labelledby="transfer-heading">
@@ -106,7 +127,22 @@
       <button id="transfer-check" type="button">理由を確認</button>
       <p id="transfer-feedback" role="status" aria-live="polite"></p>
       <p>実物で確かめるには <a href="https://github.com/sokoide/trampoline/blob/main/README.md#最初の-trampoline-到着">gdb の観察手順</a>へ進み、<code>ret</code> 直後の <code>rsp</code> とスタックの値を予測してから見る。</p>
-      <button id="restart" type="button" class="secondary">最初からやり直す</button>
+      <h2>手がかりなしで確かめる</h2>
+      <p>各問を先に解き、初回の結果と解説を比べてください。</p>
+      <div id="review-questions"></div>
+      <button id="review-check" type="button">理解を確認</button>
+      <p id="review-feedback" role="status" aria-live="polite"></p>
+      <h2>開始前の説明を更新する</h2>
+      <p id="before-copy"></p>
+      <label for="after">同じ問いにもう一度答え、変わった点を書いてください。</label>
+      <textarea id="after"></textarea>
+      <details><summary>説明の自己点検（書いた後に開く）</summary>
+        <ul><li>queue は次のスレッドを選び、ret の行き先はそのスタック上の値で決まる。</li>
+        <li>初回は setup_stack が置いた trampoline のアドレスを使う。</li>
+        <li>A の yield 時に rsp を A.ctx.rsp に保存し、再開時に復元する。ret はそこに入った継続先へ戻る。</li>
+        <li>ret が進めるのはCPUの rsp。保存先の A.ctx.rsp を自動で書き換えるわけではない。</li></ul>
+      </details>
+      <button id="restart" type="button" class="secondary">予測メモを残してやり直す</button>
     </section>
   </main>
   <script>
@@ -118,12 +154,39 @@
     const $ = (id) => document.getElementById(id);
     let solved = false;
     let hintLevel = 0;
+    let attempts = 0;
+    const records = [];
+    let reviewFirst = null;
+    const review = [
+      { question: 'A が yield。queue は C → B、C は開始済み。次のスレッドと ret 先は？', options: ['B の trampoline', 'C の保存済み継続先', 'C の trampoline'], answer: 1, why: '名前順ではなく FIFO なので C。開始済みの C は保存済み継続先から再開する。' },
+      { question: '復元直後 rsp = 0x1000、memory[0x1000] = &trampoline、memory[0x1008] = 0。ret 直後の rsp は？', options: ['0x1000', '0x0', '0x1008'], answer: 2, why: 'ret は8バイトの戻り先を取り出して rsp を8増やす。ジャンプ先は trampoline、次のスタック値は0。' },
+      { question: 'main.ctx.rsp に、継続先を置いたスタック上の場所を保存した。後で main に戻る？', options: ['保存しただけでは戻らない', 'C の次に必ず戻る', '各 yield のたびに戻る'], answer: 0, why: '保存と選択は別。main は ready queue に入らないため、この実装では再選択されない。' },
+      { question: 'A だけを生成し、A が yield。queue は空。何が起きる？', options: ['空なので _exit(1)', 'main に戻る', 'A 自身の継続先へ戻る'], answer: 2, why: '先に A を末尾へ追加し、その A を取り出す。prev と next が同じでも、保存した rsp を復元して戻る。' }
+    ];
+    review.forEach((item, i) => {
+      const label = document.createElement('label');
+      label.htmlFor = `review-${i}`;
+      label.textContent = `${i + 1}. ${item.question}`;
+      const select = document.createElement('select');
+      select.id = label.htmlFor;
+      select.add(new Option('選択してください', ''));
+      item.options.forEach((option, j) => select.add(new Option(option, String(j))));
+      $('review-questions').append(label, select);
+    });
 
     function prediction() {
       const afterPush = state.current === 'main' ? [...state.queue] : [...state.queue, state.current];
       const next = afterPush[0];
       return { afterPush, next, target: state.saved[next] };
     }
+
+    function updateDestinationLabels() {
+      const destination = $('next-thread').value || '切替え先のスレッド自身';
+      $('ret-target').options[2].textContent = `${destination} が以前 st_ctx_swap を呼び出した直後`;
+      $('rsp-reason').options[2].textContent = `${destination} が以前 st_ctx_swap を呼び出した直後へ戻るアドレス`;
+    }
+
+    $('next-thread').addEventListener('change', updateDestinationLabels);
 
     function render() {
       const isDone = state.step === totalSteps;
@@ -145,7 +208,10 @@
         queueOptions[2].value = 'start';
         queueOptions[2].textContent = `${state.current} は queue に入れず、先頭を取り出す`;
       }
-      $('contexts').textContent = ['A', 'B', 'C'].map((thread) => `${thread}.ctx.rsp → ${state.saved[thread] === 'trampoline' ? '&trampoline（未開始）' : '前回の st_ctx_swap 呼出し直後'}`).join('\n');
+      $('contexts').textContent = ['A', 'B', 'C', 'main'].map((thread) => `${thread}: ${state.saved[thread] === 'none' ? '未保存' : `memory[${thread}.ctx.rsp] = ${state.saved[thread] === 'trampoline' ? '&trampoline（初期値）' : '保存時の継続先アドレス'}`}${thread === state.current ? '（実行中：保存値は現在の rsp と異なり得る）' : ''}`).join('\n');
+      $('before-copy').textContent = `開始前の説明：${$('before').value || '未記入'}`;
+      $('context-help').open = state.step < 3;
+      attempts = 0;
       $('task').textContent = isDone ? '' : 'まず次のスレッドと ret の行き先を予測してください。確認に成功するまで状態は変わりません。';
       $('next-thread').disabled = isDone;
       $('ret-target').disabled = isDone;
@@ -159,6 +225,7 @@
       $('result').hidden = true;
       $('hint-text').hidden = true;
       $('next-thread').value = '';
+      updateDestinationLabels();
       $('ret-target').value = '';
       $('queue-reason').value = '';
       $('rsp-reason').value = '';
@@ -176,22 +243,25 @@
         $('feedback').className = 'feedback error';
         return;
       }
+      attempts++;
       if (chosenNext !== expected.next || chosenTarget !== expected.target || $('queue-reason').value !== queueReason || $('rsp-reason').value !== expected.target) {
         const parts = [];
         if (chosenNext !== expected.next) parts.push('ready queue の先頭をもう一度追ってください');
-        if (chosenTarget !== expected.target) parts.push('選ばれたスレッドの ctx.rsp を確認してください');
+        if (chosenTarget !== expected.target) parts.push(chosenTarget === 'worker' ? 'worker を呼ぶのは trampoline。ret が直接 worker の先頭へ進むわけではありません' : '初回は人工的な戻り先、再開は call が積んだ戻り先を使います');
         if ($('queue-reason').value !== queueReason) parts.push('queue の操作を確認してください');
-        if ($('rsp-reason').value !== expected.target) parts.push('ctx.rsp が指す値を確認してください');
+        if ($('rsp-reason').value !== expected.target) parts.push('ctx.rsp は場所、その場所に入った値が戻り先です。初期値か保存済み継続先か確認してください');
         $('feedback').textContent = parts.join('。') + '。';
         $('feedback').className = 'feedback error';
         return;
       }
       solved = true;
+      ['next-thread', 'ret-target', 'queue-reason', 'rsp-reason'].forEach(id => $(id).disabled = true);
+      $('check').disabled = true;
       $('feedback').textContent = '予測が一致しました。なぜそうなるかを確認してから切り替えてください。';
       $('feedback').className = 'feedback success';
       $('result').textContent = expected.target === 'trampoline'
         ? `${expected.next} は未開始です。初期スタックの先頭に置いた &trampoline を ret が取り出します。trampoline は current->fn(current->arg) を呼びます。`
-        : `${expected.next} は以前 yield しています。保存された rsp が st_ctx_swap の呼出し直後の戻り先を指し、そこから呼出し元へ順に戻ります。`;
+        : `${expected.next} 自身が以前 yield したときの st_ctx_swap 呼出し直後へ戻ります。C → A では、A → B の切替え時に A のスタックへ積まれた戻りアドレスを使います。直前の B → C の呼出しへ戻るわけではありません。`;
       $('result').hidden = false;
       $('advance').hidden = false;
     });
@@ -203,17 +273,24 @@
         ? state.current === 'main'
           ? 'st_start() は main を queue に入れません。ready queue の先頭を選びます。'
           : `st_yield() は ${state.current} を末尾へ入れてから、先頭を取り出します。`
-        : `切替え直前の queue は ${expected.afterPush.join(' → ')}。先頭の ctx.rsp が &trampoline なら初回開始、保存した継続先なら再開です。`;
+        : `切替え直前の queue は ${expected.afterPush.join(' → ')}。先頭スレッドの memory[ctx.rsp] が &trampoline なら初回開始、保存した継続先なら再開です。`;
       $('hint-text').hidden = false;
     });
 
     $('advance').addEventListener('click', () => {
       if (!solved) return;
       const expected = prediction();
+      const previous = state.current;
+      const beforeQueue = state.queue.join(' → ') || '空';
+      records.push({ attempts, hintLevel });
       if (state.current !== 'main') state.queue.push(state.current);
       state.saved[state.current] = 'continuation';
       state.current = state.queue.shift();
       if (state.current !== expected.next) throw new Error('queue model mismatch');
+      const entry = document.createElement('li');
+      entry.textContent = `${previous} → ${state.current}：queue [${beforeQueue}] → ${previous === 'main' ? '追加なし' : '末尾へ追加後'} [${expected.afterPush.join(' → ')}] → 取出し後 [${state.queue.join(' → ') || '空'}]。${previous}.ctx.rsp に今回の継続先を置いた場所を保存 → ${state.current}.ctx.rsp を復元 → ret で${expected.target === 'trampoline' ? ' trampoline へ初回開始' : '保存済み継続先へ再開'}。回答 ${attempts} 回、ヒント ${hintLevel} 段階。`;
+      $('history').append(entry);
+      $('record-summary').textContent = `ヒントなし・初回正答：${records.filter(r => r.attempts === 1 && r.hintLevel === 0).length} / ${records.length}。これは練習の記録です。最後に別条件で確かめます。`;
       state.step++;
       render();
     });
@@ -223,7 +300,18 @@
       $('transfer-feedback').textContent = !answer ? '一つ選択してください。'
         : `${answer === 'exit'
           ? '正解。trampoline は fn(arg) の return 後に _exit(0) を呼ぶため、B と C も含むプロセス全体が終わります。'
-          : '再確認。st.c の trampoline() は fn(arg) が return した直後に _exit(0) を呼びます。'} 各スレッドは初回の切替えで trampoline に入ります。A が yield 後に再開するときは trampoline ではなく、保存された ctx.rsp が指す前回の st_ctx_swap 呼出し直後から続きます。`;
+          : '再確認。st.c の trampoline() は fn(arg) が return した直後に _exit(0) を呼びます。'} 各スレッドは初回の切替えで trampoline に入ります。A が yield 後に再開するときは trampoline ではなく、A → B の切替え時に保存した A.ctx.rsp を復元し、A 自身の st_ctx_swap 呼出し直後から続きます。`;
+    });
+
+    $('review-check').addEventListener('click', () => {
+      const values = review.map((_, i) => $(`review-${i}`).value);
+      if (values.some(value => value === '')) {
+        $('review-feedback').textContent = '全4問を選択してください。';
+        return;
+      }
+      const score = review.filter((item, i) => Number(values[i]) === item.answer).length;
+      if (reviewFirst === null) reviewFirst = score;
+      $('review-feedback').textContent = `初回 ${reviewFirst} / 4、今回 ${score} / 4。` + review.map((item, i) => `問${i + 1}：${Number(values[i]) === item.answer ? '正解' : '再確認'}。${item.why}`).join(' ');
     });
 
     $('restart').addEventListener('click', () => {
@@ -231,6 +319,12 @@
       state.queue = ['A', 'B', 'C'];
       state.saved = { A: 'trampoline', B: 'trampoline', C: 'trampoline', main: 'none' };
       state.step = 0;
+      records.length = 0;
+      reviewFirst = null;
+      $('history').replaceChildren();
+      $('record-summary').textContent = 'まだ切り替えていません。予測が一致したら実行してください。';
+      review.forEach((_, i) => $(`review-${i}`).value = '');
+      $('review-feedback').textContent = '';
       $('transfer-answer').value = '';
       $('transfer-feedback').textContent = '';
       render();

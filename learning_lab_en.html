@@ -46,6 +46,19 @@
       <p>This is a symbolic model of <a href="https://github.com/sokoide/trampoline/blob/main/st.c">st.c</a> and <a href="https://github.com/sokoide/trampoline/blob/main/ctx.S">ctx.S</a>. It does not execute the code or show actual register values or addresses. Use the gdb exercise in the README to inspect the real program.</p>
     </section>
 
+    <section class="panel" aria-labelledby="prepare-heading">
+      <h2 id="prepare-heading">Before you start (about 3 minutes)</h2>
+      <p>Plan for 15–20 minutes in total. Read <a href="https://github.com/sokoide/trampoline/blob/main/README_en.md#prerequisites">the Prerequisites in the README</a> and sections 1–3 of "Context switch" first.</p>
+      <p><code>ctx.rsp</code> is the address of a <strong>location on the stack</strong>. The value stored at that location is the return destination. <code>memory[ctx.rsp]</code> below represents the 8 bytes at that location.</p>
+      <pre>save:    prev.ctx.rsp = rsp
+restore: rsp = next.ctx.rsp
+ret:     rip = memory[rsp]; rsp = rsp + 8</pre>
+      <p>This excerpt shows only rsp and ret. The implementation also saves and restores the other registers and the FP control state. The call chain assumes the README's standard build (no optimization).</p>
+      <label for="before">Pre-start prediction: why does the destination of ret differ between main → A's first start and C → A's resume?</label>
+      <textarea id="before" placeholder="Explain it using what the queue selects, where the value is saved, and the value at that location. Note anything you are unsure about as well."></textarea>
+      <p>Notes are kept only while this page is open. They disappear on reload, so copy them if you need them.</p>
+    </section>
+
     <section class="panel" aria-labelledby="lab-heading">
       <h2 id="lab-heading">Predict the switch</h2>
       <p id="progress" class="progress"></p>
@@ -54,7 +67,9 @@
         <div class="state"><strong>Currently running</strong><span id="current"></span></div>
         <div class="state"><strong>Ready queue (head → tail)</strong><span id="queue"></span></div>
       </div>
+      <details id="context-help" open><summary>Saved-stack clue (close it once you are comfortable)</summary>
       <pre id="contexts"></pre>
+      <p>A running thread's ctx.rsp is a record from when it was saved, not the CPU's current rsp.</p></details>
       <p id="task"></p>
       <label for="next-thread">Which thread runs after the switch?</label>
       <select id="next-thread">
@@ -66,7 +81,7 @@
       <select id="ret-target">
         <option value="">Select an answer</option>
         <option value="trampoline">The new thread's trampoline</option>
-        <option value="continuation">Just after the previous st_ctx_swap call</option>
+        <option value="continuation">Just after the destination thread's own previous st_ctx_swap call</option>
         <option value="worker">The start of the worker function</option>
         <option value="main">The next instruction in main</option>
       </select>
@@ -76,11 +91,11 @@
         <option></option>
         <option></option>
       </select>
-      <label for="rsp-reason">Before the switch, what does the destination thread's (<code>next</code>) <code>ctx.rsp</code> point to?</label>
+      <label for="rsp-reason">Before the switch, what is stored at the location the destination thread's (<code>next</code>) <code>ctx.rsp</code> points to?</label>
       <select id="rsp-reason">
         <option value="">Select an answer</option>
-        <option value="trampoline"><code>&amp;trampoline</code> on its initial stack</option>
-        <option value="continuation">Just after its previous <code>st_ctx_swap</code> call (the next instruction to execute)</option>
+        <option value="trampoline">The trampoline address placed on its initial stack</option>
+        <option value="continuation">The return address to just after the destination thread's own previous st_ctx_swap call</option>
       </select>
       <p class="hint">This asks about the destination thread. The source thread's (<code>prev</code>) <code>ctx.rsp</code> is saved so it can resume just after this <code>st_ctx_swap</code> call.</p>
       <div>
@@ -91,6 +106,12 @@
       <p id="hint-text" class="hint" hidden></p>
       <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
       <p id="result" class="result" hidden></p>
+    </section>
+
+    <section class="panel" aria-labelledby="history-heading">
+      <h2 id="history-heading">History of the switches you performed</h2>
+      <p id="record-summary">No switches yet. Perform one once your prediction matches.</p>
+      <ol id="history"></ol>
     </section>
 
     <section id="transfer" class="panel" hidden aria-labelledby="transfer-heading">
@@ -106,7 +127,22 @@
       <button id="transfer-check" type="button">Check your reasoning</button>
       <p id="transfer-feedback" role="status" aria-live="polite"></p>
       <p>To inspect the real program, follow the <a href="https://github.com/sokoide/trampoline/blob/main/README_en.md#first-arrival-at-the-trampoline">gdb observation steps</a>. Predict the value of <code>rsp</code> and the stack contents immediately after <code>ret</code> before inspecting them.</p>
-      <button id="restart" type="button" class="secondary">Start over</button>
+      <h2>Verify without clues</h2>
+      <p>Answer each question first, then compare your first-try result with the explanation.</p>
+      <div id="review-questions"></div>
+      <button id="review-check" type="button">Check your understanding</button>
+      <p id="review-feedback" role="status" aria-live="polite"></p>
+      <h2>Update your pre-start explanation</h2>
+      <p id="before-copy"></p>
+      <label for="after">Answer the same question again and write down what has changed.</label>
+      <textarea id="after"></textarea>
+      <details><summary>Self-check of your explanation (open it after writing)</summary>
+        <ul><li>The queue selects the next thread, and the destination of ret is determined by the value on that thread's stack.</li>
+        <li>The first start uses the trampoline address that setup_stack placed.</li>
+        <li>When A yields, its rsp is saved into A.ctx.rsp and restored when A resumes. ret returns to the continuation stored there.</li>
+        <li>What ret advances is the CPU's rsp. It does not automatically rewrite the saved location A.ctx.rsp.</li></ul>
+      </details>
+      <button id="restart" type="button" class="secondary">Start over, keeping your prediction notes</button>
     </section>
   </main>
   <script>
@@ -118,12 +154,39 @@
     const $ = (id) => document.getElementById(id);
     let solved = false;
     let hintLevel = 0;
+    let attempts = 0;
+    const records = [];
+    let reviewFirst = null;
+    const review = [
+      { question: 'A yields. The queue is C → B, and C has already started. Which thread runs next, and where does ret go?', options: ["B's trampoline", "C's saved continuation", "C's trampoline"], answer: 1, why: 'The order is FIFO, not by name, so C runs. A thread that has already started resumes from its saved continuation.' },
+      { question: 'Right after a restore, rsp = 0x1000, memory[0x1000] = &trampoline, and memory[0x1008] = 0. What is rsp right after ret?', options: ['0x1000', '0x0', '0x1008'], answer: 2, why: 'ret pops the 8-byte return destination and adds 8 to rsp. It jumps to the trampoline, and the next value on the stack is 0.' },
+      { question: 'main.ctx.rsp saved the stack location that holds the continuation. Does control return to main later?', options: ['Not just by being saved', 'Always right after C', 'After every yield'], answer: 0, why: 'Saving and selecting are separate. main never enters the ready queue, so this implementation never selects it again.' },
+      { question: 'Only A is created, and A yields. The queue is now empty. What happens?', options: ['The queue is empty, so _exit(1)', 'Returns to main', "Returns to A's own continuation"], answer: 2, why: 'A is appended to the tail first, and then that same A is popped. Even when prev and next are the same, the saved rsp is restored and ret returns there.' }
+    ];
+    review.forEach((item, i) => {
+      const label = document.createElement('label');
+      label.htmlFor = `review-${i}`;
+      label.textContent = `${i + 1}. ${item.question}`;
+      const select = document.createElement('select');
+      select.id = label.htmlFor;
+      select.add(new Option('Select an answer', ''));
+      item.options.forEach((option, j) => select.add(new Option(option, String(j))));
+      $('review-questions').append(label, select);
+    });
 
     function prediction() {
       const afterPush = state.current === 'main' ? [...state.queue] : [...state.queue, state.current];
       const next = afterPush[0];
       return { afterPush, next, target: state.saved[next] };
     }
+
+    function updateDestinationLabels() {
+      const destination = $('next-thread').value || 'the destination thread';
+      $('ret-target').options[2].textContent = `Just after ${destination}'s own previous st_ctx_swap call`;
+      $('rsp-reason').options[2].textContent = `The return address to just after ${destination}'s own previous st_ctx_swap call`;
+    }
+
+    $('next-thread').addEventListener('change', updateDestinationLabels);
 
     function render() {
       const isDone = state.step === totalSteps;
@@ -145,7 +208,10 @@
         queueOptions[2].value = 'start';
         queueOptions[2].textContent = `do not enqueue ${state.current}; pop the head`;
       }
-      $('contexts').textContent = ['A', 'B', 'C'].map((thread) => `${thread}.ctx.rsp → ${state.saved[thread] === 'trampoline' ? '&trampoline (not started)' : 'just after the previous st_ctx_swap call'}`).join('\n');
+      $('contexts').textContent = ['A', 'B', 'C', 'main'].map((thread) => `${thread}: ${state.saved[thread] === 'none' ? 'not saved' : `memory[${thread}.ctx.rsp] = ${state.saved[thread] === 'trampoline' ? '&trampoline (initial value)' : 'continuation address saved at its last switch'}`}${thread === state.current ? ' (running: the saved value can differ from the current rsp)' : ''}`).join('\n');
+      $('before-copy').textContent = `Pre-start explanation: ${$('before').value || 'not filled in'}`;
+      $('context-help').open = state.step < 3;
+      attempts = 0;
       $('task').textContent = isDone ? '' : 'Predict the next thread and the destination of ret. The state will not change until your prediction is correct.';
       $('next-thread').disabled = isDone;
       $('ret-target').disabled = isDone;
@@ -159,6 +225,7 @@
       $('result').hidden = true;
       $('hint-text').hidden = true;
       $('next-thread').value = '';
+      updateDestinationLabels();
       $('ret-target').value = '';
       $('queue-reason').value = '';
       $('rsp-reason').value = '';
@@ -176,22 +243,25 @@
         $('feedback').className = 'feedback error';
         return;
       }
+      attempts++;
       if (chosenNext !== expected.next || chosenTarget !== expected.target || $('queue-reason').value !== queueReason || $('rsp-reason').value !== expected.target) {
         const parts = [];
         if (chosenNext !== expected.next) parts.push('Trace the head of the ready queue again');
-        if (chosenTarget !== expected.target) parts.push('Check the destination thread\'s ctx.rsp');
+        if (chosenTarget !== expected.target) parts.push(chosenTarget === 'worker' ? 'The trampoline is what calls worker; ret does not proceed directly to the start of worker' : 'The first start uses an artificial return destination; a resume uses the return address pushed by call');
         if ($('queue-reason').value !== queueReason) parts.push('Check how the queue is changed');
-        if ($('rsp-reason').value !== expected.target) parts.push('Check what ctx.rsp points to');
+        if ($('rsp-reason').value !== expected.target) parts.push('ctx.rsp is a location, and the value stored there is the return destination. Check whether it is the initial value or a saved continuation');
         $('feedback').textContent = parts.join('. ') + '.';
         $('feedback').className = 'feedback error';
         return;
       }
       solved = true;
+      ['next-thread', 'ret-target', 'queue-reason', 'rsp-reason'].forEach(id => $(id).disabled = true);
+      $('check').disabled = true;
       $('feedback').textContent = 'Your prediction is correct. Review why, then perform the switch.';
       $('feedback').className = 'feedback success';
       $('result').textContent = expected.target === 'trampoline'
         ? `${expected.next} has not started yet. ret pops &trampoline from the top of its initial stack. The trampoline calls current->fn(current->arg).`
-        : `${expected.next} has yielded before. Its saved rsp points just after the st_ctx_swap call, so execution resumes there and returns through its callers.`;
+        : `${expected.next} returns to just after the st_ctx_swap call from when it yielded earlier. In C → A, this uses the return address that was pushed onto A's stack during the A → B switch. It does not return to the immediately preceding B → C call.`;
       $('result').hidden = false;
       $('advance').hidden = false;
     });
@@ -203,17 +273,24 @@
         ? state.current === 'main'
           ? 'st_start() does not enqueue main. It selects the head of the ready queue.'
           : `st_yield() enqueues ${state.current} at the tail, then selects the head.`
-        : `Just before the switch, the queue is ${expected.afterPush.join(' → ')}. If the head thread's ctx.rsp points to &trampoline, it is starting for the first time; otherwise it resumes at its saved continuation.`;
+        : `Just before the switch, the queue is ${expected.afterPush.join(' → ')}. If the head thread's memory[ctx.rsp] holds &trampoline, it is starting for the first time; if it holds a saved continuation, it is resuming.`;
       $('hint-text').hidden = false;
     });
 
     $('advance').addEventListener('click', () => {
       if (!solved) return;
       const expected = prediction();
+      const previous = state.current;
+      const beforeQueue = state.queue.join(' → ') || 'Empty';
+      records.push({ attempts, hintLevel });
       if (state.current !== 'main') state.queue.push(state.current);
       state.saved[state.current] = 'continuation';
       state.current = state.queue.shift();
       if (state.current !== expected.next) throw new Error('queue model mismatch');
+      const entry = document.createElement('li');
+      entry.textContent = `${previous} → ${state.current}: queue [${beforeQueue}] → ${previous === 'main' ? 'nothing appended' : 'after appending to the tail'} [${expected.afterPush.join(' → ')}] → after popping [${state.queue.join(' → ') || 'Empty'}]. Save into ${previous}.ctx.rsp the location holding the new continuation → restore ${state.current}.ctx.rsp → ret ${expected.target === 'trampoline' ? 'starts the thread for the first time, at the trampoline' : 'resumes at the saved continuation'}. Answers: ${attempts}, hint level: ${hintLevel}.`;
+      $('history').append(entry);
+      $('record-summary').textContent = `First-try correct answers without hints: ${records.filter(r => r.attempts === 1 && r.hintLevel === 0).length} / ${records.length}. This is a record of your practice; you will verify it under different conditions at the end.`;
       state.step++;
       render();
     });
@@ -223,7 +300,18 @@
       $('transfer-feedback').textContent = !answer ? 'Select an answer.'
         : `${answer === 'exit'
           ? 'Correct. After fn(arg) returns, the trampoline calls _exit(0), which terminates the entire process, including B and C.'
-          : 'Review the code: trampoline() in st.c calls _exit(0) immediately after fn(arg) returns.'} Each thread enters the trampoline on its first switch. When A resumes after yielding, it does not return to the trampoline; it continues just after the previous st_ctx_swap call, as pointed to by its saved ctx.rsp.`;
+          : 'Review the code: trampoline() in st.c calls _exit(0) immediately after fn(arg) returns.'} Each thread enters the trampoline on its first switch. When A resumes after yielding, it does not return to the trampoline; it restores A.ctx.rsp, which was saved during the A → B switch, and continues just after A's own st_ctx_swap call.`;
+    });
+
+    $('review-check').addEventListener('click', () => {
+      const values = review.map((_, i) => $(`review-${i}`).value);
+      if (values.some(value => value === '')) {
+        $('review-feedback').textContent = 'Select an answer for all four questions.';
+        return;
+      }
+      const score = review.filter((item, i) => Number(values[i]) === item.answer).length;
+      if (reviewFirst === null) reviewFirst = score;
+      $('review-feedback').textContent = `First try ${reviewFirst} / 4, this time ${score} / 4. ` + review.map((item, i) => `Q${i + 1}: ${Number(values[i]) === item.answer ? 'correct' : 'look at it again'}. ${item.why}`).join(' ');
     });
 
     $('restart').addEventListener('click', () => {
@@ -231,6 +319,12 @@
       state.queue = ['A', 'B', 'C'];
       state.saved = { A: 'trampoline', B: 'trampoline', C: 'trampoline', main: 'none' };
       state.step = 0;
+      records.length = 0;
+      reviewFirst = null;
+      $('history').replaceChildren();
+      $('record-summary').textContent = 'No switches yet. Perform one once your prediction matches.';
+      review.forEach((_, i) => $(`review-${i}`).value = '');
+      $('review-feedback').textContent = '';
       $('transfer-answer').value = '';
       $('transfer-feedback').textContent = '';
       render();

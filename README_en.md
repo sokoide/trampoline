@@ -36,13 +36,37 @@ but look them up first if the terms are unfamiliar.
 
 ## Guided interactive exercise
 
-Open the [English browser exercise](https://sokoide.github.io/trampoline/learning_lab_en.html) or the [Japanese browser exercise](https://sokoide.github.io/trampoline/learning_lab.html) to predict the next logical thread and
-`ret` target at each switch, then check your reasoning against the symbolic queue and
-saved `rsp`. It runs locally without Linux; it models the code but does not execute it.
-Predict the first entry and A's later resume before starting. Afterward, explain the
-queue change, the selected `ctx.rsp`, and the destination, then verify them with the
-gdb walkthrough below. Correct answers in the exercise do not establish a measured
-learning gain.
+The [English browser exercise](https://sokoide.github.io/trampoline/learning_lab_en.html) or the [Japanese browser exercise](https://sokoide.github.io/trampoline/learning_lab.html) walks from `st_start()` through the yields of A, B,
+and C and A's resume, in the order **predict → operate → verify the reasoning**. You
+only open the file in a browser; no Linux environment is needed. The page is a symbolic
+model of the implementation; confirm actual addresses and register values with gdb.
+
+The goal is to be able to explain, from the ready queue and `ctx.rsp`, which logical
+thread runs next and where `ret` in `st_ctx_swap` goes. Before reading the rest of this
+document, write down your prediction for "where does the first `ret` jump" and "where
+does A return when it resumes after one round"; after the exercise, answer the same
+questions with reasons.
+
+Plan for 15–20 minutes. Read [Prerequisites](#prerequisites) and sections 1–3 of
+[Context switch](#context-switch) first, and distinguish `ctx.rsp` (a location on the
+stack) from `memory[ctx.rsp]` (the return destination stored there).
+
+1. In the "pre-start prediction" box on the page, write how the first start differs from A's resume.
+2. Work through the four steps of the exercise. On a wrong answer, review the queue and the saved stacks. The fourth step closes its clue, so recall it on your own first and open it only if needed.
+3. In the switch history, trace how threads are appended to and popped from the queue, how prev is saved, and how next is restored.
+4. Consider what happens when worker returns, when the queue order changes, what rsp is after ret, whether main gets selected again, and the case with only one thread. Review your results, separating first-try correct answers from retried ones.
+5. Rewrite your pre-start explanation, open the self-check, and fill in any missing cause-and-effect links.
+6. In [Observing with gdb (GNU Debugger)](#observing-with-gdb-gnu-debugger), compare the initial `rsp` and A's resume point against the real program.
+
+Records are kept only while the page is open. Copy any explanation you need before
+reloading. To try changes locally, open [learning_lab_en.html](learning_lab_en.html)
+directly in your browser.
+
+When checking whether an explanation is correct, see whether **the queue change, the
+selected `ctx.rsp`, and the destination after `ret`** can each be stated separately.
+Correct answers and ease of use in the exercise are not treated as demonstrating a
+measured learning gain. Comparing the initial prediction with the post-exercise
+explanation is what confirms understanding with this material.
 
 ## Table of contents
 
@@ -240,7 +264,7 @@ sequenceDiagram
     Y->>S: switch_to_next()
     S->>S: append A to the end of the ready queue
     S->>X: call st_ctx_swap(A.ctx, B.ctx)
-    Note over X: A.ctx.rsp = return address of st_ctx_swap's caller
+    Note over X: A.ctx.rsp = the stack location that holds the return address
     X->>X: restore B's rsp and callee-saved registers
     X->>B: ret
     B->>B: continue worker("B"), or start it
